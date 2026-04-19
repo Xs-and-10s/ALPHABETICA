@@ -1,0 +1,65 @@
+{
+  "name": "@xs-and-10s/alphabetica",
+  "version": "0.2.0-alpha.0",
+  "description": "26 letters plus _, one per utility. A tiny, dependency-free combinator library for testing, DevOps scripting, code golf, and sandboxed execution.",
+  "keywords": [
+    "testing",
+    "bdd",
+    "minikanren",
+    "logic-programming",
+    "trampoline",
+    "pattern-matching",
+    "combinators",
+    "utility",
+    "shell",
+    "dsl"
+  ],
+  "homepage": "https://github.com/Xs-and-10s/alphabetica#readme",
+  "bugs": {
+    "url": "https://github.com/Xs-and-10s/alphabetica/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Xs-and-10s/alphabetica.git"
+  },
+  "license": "MIT",
+  "author": "Mark (@Xs-and-10s)",
+  "type": "module",
+  "main": "./alphabetica.mjs",
+  "types": "./dist/alphabetica.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/alphabetica.d.ts",
+      "import": "./alphabetica.mjs",
+      "default": "./alphabetica.mjs"
+    },
+    "./ts": "./alphabetica.ts",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "alphabetica.ts",
+    "alphabetica.mjs",
+    "dist/",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx alphabetica.test.ts && node alphabetica.test.mjs",
+    "test:ts": "tsx alphabetica.test.ts",
+    "test:mjs": "node alphabetica.test.mjs",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run clean && npm run typecheck && npm run test && npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.5.0"
+  }
+}
