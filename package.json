@@ -56,7 +56,8 @@
     "test:exhaustive": "tsx exhaustive.test.ts",
     "test:mjs": "node alphabetica.test.mjs",
     "clean": "rm -rf dist",
-    "prepublishOnly": "npm run clean && npm run typecheck && npm run test && npm run build"
+    "prepublishOnly": "npm run clean && npm run typecheck && npm run test && npm run build && npm run check-version",
+    "check-version": "node -e \"const v=require('./package.json').version; require('child_process').execSync('npm view @xs-and-10s/alphabetica@'+v+' version 2>/dev/null').toString().trim()===v && (console.error('version '+v+' already published'),process.exit(1))\""
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
