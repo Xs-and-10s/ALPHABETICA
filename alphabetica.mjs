@@ -109,11 +109,15 @@ export function B(scrutinee, ...arms) {
   for (const [pattern, handler] of arms) {
     const captures = {};
     if (matchPattern(pattern, scrutinee, captures)) {
-      return handler(captures);
+      return handler(captures, scrutinee);
     }
   }
   throw new Error("B: no pattern matched and no default arm [_, fn] provided");
 }
+
+// B.exhaustive: same runtime as B. Exhaustiveness is a TS-only check in the
+// .ts version (via the return-type-poison trick). In JS it's a simple alias.
+B.exhaustive = (scrutinee, ...arms) => B(scrutinee, ...arms);
 
 function matchPattern(pattern, value, captures) {
   if (pattern === _ || (typeof pattern === "function" && pattern[WILDCARD])) {
@@ -196,6 +200,11 @@ export function E(a, b) {
   }
   return Object.is(a, b);
 }
+
+E.lt = function lt(a, b) { return arguments.length === 1 ? (x) => x < a  : a < b;  };
+E.gt = function gt(a, b) { return arguments.length === 1 ? (x) => x > a  : a > b;  };
+E.le = function le(a, b) { return arguments.length === 1 ? (x) => x <= a : a <= b; };
+E.ge = function ge(a, b) { return arguments.length === 1 ? (x) => x >= a : a >= b; };
 
 // -----------------------------------------------------------------------------
 // F  : Fold (left or right) | Facts — async-aware
@@ -394,7 +403,14 @@ export async function R(first, second) {
   }
   const looksLikeModule =
     /\.(m|c)?[jt]sx?$/.test(first) || (!first.includes("/") && !first.includes("."));
-  if (looksLikeModule && second === undefined) return import(first);
+  if (looksLikeModule && (second === undefined ||
+      (typeof second === "string" && /^(file|https?):\/\//.test(second)))) {
+    if (typeof second === "string" && first.startsWith(".")) {
+      const resolved = new URL(first, second).href;
+      return import(resolved);
+    }
+    return import(first);
+  }
   const { promises: fs } = await import("node:fs");
   if (typeof second === "string") return fs.readFile(first, second);
   return fs.readFile(first);
@@ -561,6 +577,13 @@ export function W(first, second, third) {
 
 export function X(first, ...rest) {
   if (Array.isArray(first) && "raw" in first) return executeShell(first, rest, "/bin/bash");
+  // 1-arg form: count any fact with this relation regardless of arity.
+  if (rest.length === 0) {
+    const kb = currentKB();
+    const out = [];
+    for (const fact of kb) if (fact.relation === first) out.push({});
+    return out;
+  }
   return solve([{ __fact: true, relation: first, terms: rest }]);
 }
 
@@ -627,48 +650,54 @@ export function Z(...arrs) {
 }
 
 // =============================================================================
-// Runner
+// Runner + Reporters
 // =============================================================================
 
 /**
  * @typedef {"passed" | "failed" | "skipped"} TestStatus
- * @typedef {"given" | "state" | "when" | "then"} ScopeGranularity
+ * @typedef {"given" | "state" | "when" | "then" | "inherit"} ScopeGranularity
+ * @typedef {"pretty" | "tap" | "junit" | "null"} ReporterName
  */
 
 export async function run(tree, opts = {}) {
   const trees = Array.isArray(tree) ? tree : [tree];
   const results = [];
   const kbScope = opts.kbScope ?? "then";
-  const log = opts.silent ? () => {} : console.log.bind(console);
+  const write = opts.write ?? ((s) => process.stdout.write(s));
+  const reporter = opts.silent ? nullReporter : resolveReporter(opts.reporter ?? "pretty");
   const start = performance.now();
+  const rCtx = { write, startedAt: start };
+
+  reporter.onRunStart?.(rCtx);
 
   for (const t of trees) {
-    await runNode(t, [], results, { kbScope, filter: opts.filter, log });
+    await runNode(t, [], results, { kbScope, filter: opts.filter, reporter, rCtx });
   }
 
   const passed  = results.filter(r => r.status === "passed").length;
   const failed  = results.filter(r => r.status === "failed").length;
   const skipped = results.filter(r => r.status === "skipped").length;
   const durationMs = performance.now() - start;
+  const report = { passed, failed, skipped, durationMs, results };
 
-  if (!opts.silent) {
-    log(`\n${passed} passed, ${failed} failed, ${skipped} skipped  (${durationMs.toFixed(1)}ms)`);
-  }
-  return { passed, failed, skipped, durationMs, results };
+  reporter.onRunEnd?.(report, rCtx);
+  return report;
 }
 
 async function runNode(node, path, results, ctx) {
   switch (node.kind) {
     case "describe": {
       const p = [...path, node.label];
-      ctx.log(`${"  ".repeat(path.length)}${node.label}`);
+      ctx.reporter.onSuiteEnter?.(node, p, ctx.rCtx);
       for (const child of node.children) await runNode(child, p, results, ctx);
       return;
     }
     case "examine": {
       const p = [...path, node.label];
       if (ctx.filter && !ctx.filter(p)) {
-        results.push({ path: p, status: "skipped", durationMs: 0 });
+        const r = { path: p, status: "skipped", durationMs: 0 };
+        results.push(r);
+        ctx.reporter.onResult?.(r, ctx.rCtx);
         return;
       }
       await executeCheck(p, () => node.body(), results, ctx);
@@ -676,10 +705,8 @@ async function runNode(node, path, results, ctx) {
     }
     case "given": {
       const p = [...path, `Given ${node.label}`];
-      ctx.log(`${"  ".repeat(path.length)}Given ${node.label}`);
-      const wrap = ctx.kbScope === "given"
-        ? (fn) => withKB([], fn)
-        : (fn) => fn();
+      ctx.reporter.onSuiteEnter?.(node, p, ctx.rCtx);
+      const wrap = ctx.kbScope === "given" ? (fn) => withKB([], fn) : (fn) => fn();
       await wrap(async () => {
         for (const state of node.states) await runState(state, p, results, ctx);
       });
@@ -690,21 +717,19 @@ async function runNode(node, path, results, ctx) {
 
 async function runState(state, path, results, ctx) {
   const p = [...path, state.label];
-  ctx.log(`${"  ".repeat(path.length)}${state.label}`);
-  const wrap = ctx.kbScope === "state"
-    ? (fn) => withKB([], fn)
-    : (fn) => fn();
+  ctx.reporter.onSuiteEnter?.({ kind: "describe", label: state.label, children: [] }, p, ctx.rCtx);
+  const wrap = ctx.kbScope === "state" ? (fn) => withKB([], fn) : (fn) => fn();
   await wrap(async () => {
     for (const when of state.whens) {
       const wp = [...p, `When ${when.label}`];
-      ctx.log(`${"  ".repeat(path.length + 1)}When ${when.label}`);
-      const whenWrap = ctx.kbScope === "when"
-        ? (fn) => withKB([], fn)
-        : (fn) => fn();
+      ctx.reporter.onSuiteEnter?.({ kind: "describe", label: `When ${when.label}`, children: [] }, wp, ctx.rCtx);
+      const whenWrap = ctx.kbScope === "when" ? (fn) => withKB([], fn) : (fn) => fn();
       await whenWrap(async () => {
         const tp = [...wp, `Then ${when.then.label}`];
         if (ctx.filter && !ctx.filter(tp)) {
-          results.push({ path: tp, status: "skipped", durationMs: 0 });
+          const r = { path: tp, status: "skipped", durationMs: 0 };
+          results.push(r);
+          ctx.reporter.onResult?.(r, ctx.rCtx);
           return;
         }
         const exec = () => when.then.check(state.fixture);
@@ -720,20 +745,116 @@ async function runState(state, path, results, ctx) {
 
 async function executeCheck(path, exec, results, ctx) {
   const t0 = performance.now();
-  const indent = "  ".repeat(path.length);
   try {
     const r = exec();
     if (isThenable(r)) await r;
     const durationMs = performance.now() - t0;
-    results.push({ path, status: "passed", durationMs });
-    ctx.log(`${indent}\u2713 ${path[path.length - 1]}  (${durationMs.toFixed(1)}ms)`);
+    const result = { path, status: "passed", durationMs };
+    results.push(result);
+    ctx.reporter.onResult?.(result, ctx.rCtx);
   } catch (e) {
     const durationMs = performance.now() - t0;
     const error = e instanceof Error ? e : new Error(String(e));
-    results.push({ path, status: "failed", error, durationMs });
-    ctx.log(`${indent}\u2717 ${path[path.length - 1]}  (${durationMs.toFixed(1)}ms)`);
-    ctx.log(`${indent}  ${error.message}`);
+    const result = { path, status: "failed", error, durationMs };
+    results.push(result);
+    ctx.reporter.onResult?.(result, ctx.rCtx);
   }
+}
+
+// -----------------------------------------------------------------------------
+// Built-in reporters
+// -----------------------------------------------------------------------------
+
+function resolveReporter(r) {
+  if (typeof r !== "string") return r;
+  switch (r) {
+    case "pretty": return prettyReporter;
+    case "tap":    return tapReporter;
+    case "junit":  return junitReporter;
+    case "null":   return nullReporter;
+  }
+}
+
+export const nullReporter = { name: "null" };
+
+export const prettyReporter = {
+  name: "pretty",
+  onSuiteEnter(_node, path, ctx) {
+    const indent = "  ".repeat(path.length - 1);
+    ctx.write(`${indent}${path[path.length - 1]}\n`);
+  },
+  onResult(result, ctx) {
+    const indent = "  ".repeat(result.path.length);
+    const mark = result.status === "passed" ? "\u2713"
+               : result.status === "failed" ? "\u2717"
+               : "\u25CB";
+    const label = result.path[result.path.length - 1];
+    const duration = result.status === "skipped" ? "" : `  (${result.durationMs.toFixed(1)}ms)`;
+    ctx.write(`${indent}${mark} ${label}${duration}\n`);
+    if (result.status === "failed" && result.error) {
+      ctx.write(`${indent}  ${result.error.message}\n`);
+    }
+  },
+  onRunEnd(report, ctx) {
+    ctx.write(`\n${report.passed} passed, ${report.failed} failed, ${report.skipped} skipped  (${report.durationMs.toFixed(1)}ms)\n`);
+  },
+};
+
+export const tapReporter = {
+  name: "tap",
+  onRunStart(ctx) { ctx.write(`TAP version 14\n`); },
+  onResult(result, ctx) {
+    tapReporter._n = (tapReporter._n ?? 0) + 1;
+    const n = tapReporter._n;
+    const label = result.path.join(" > ");
+    if (result.status === "passed") {
+      ctx.write(`ok ${n} - ${label}\n`);
+    } else if (result.status === "skipped") {
+      ctx.write(`ok ${n} - ${label} # SKIP\n`);
+    } else {
+      ctx.write(`not ok ${n} - ${label}\n`);
+      if (result.error) {
+        ctx.write(`  ---\n`);
+        ctx.write(`  message: ${JSON.stringify(result.error.message)}\n`);
+        ctx.write(`  severity: fail\n`);
+        ctx.write(`  ...\n`);
+      }
+    }
+  },
+  onRunEnd(report, ctx) {
+    const total = report.passed + report.failed + report.skipped;
+    ctx.write(`1..${total}\n`);
+    ctx.write(`# tests ${total}\n# pass  ${report.passed}\n# fail  ${report.failed}\n# skip  ${report.skipped}\n`);
+    tapReporter._n = 0;
+  },
+};
+
+export const junitReporter = {
+  name: "junit",
+  onRunStart(ctx) { ctx.write(`<?xml version="1.0" encoding="UTF-8"?>\n`); },
+  onRunEnd(report, ctx) {
+    const total = report.passed + report.failed + report.skipped;
+    const time = (report.durationMs / 1000).toFixed(3);
+    ctx.write(`<testsuite name="alphabetica" tests="${total}" failures="${report.failed}" skipped="${report.skipped}" time="${time}">\n`);
+    for (const r of report.results) {
+      const name = escXml(r.path.join(" > "));
+      const t = (r.durationMs / 1000).toFixed(3);
+      if (r.status === "passed") {
+        ctx.write(`  <testcase name="${name}" time="${t}"/>\n`);
+      } else if (r.status === "skipped") {
+        ctx.write(`  <testcase name="${name}" time="${t}"><skipped/></testcase>\n`);
+      } else {
+        const msg = escXml(r.error?.message ?? "failed");
+        ctx.write(`  <testcase name="${name}" time="${t}"><failure message="${msg}"/></testcase>\n`);
+      }
+    }
+    ctx.write(`</testsuite>\n`);
+  },
+};
+
+function escXml(s) {
+  return s.replace(/[<>&"']/g, (c) =>
+    ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&apos;" }[c]));
 }
 
 // =============================================================================
@@ -743,5 +864,7 @@ async function executeCheck(path, exec, results, ctx) {
 export const ALPHABETICA = Object.freeze({
   _, A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z,
   run, withKB, scope, currentKB, goal,
+  prettyReporter, tapReporter, junitReporter, nullReporter,
   MODULE_NAME, MODULE_DOC, DOC, WILDCARD, BOUNCE,
 });
+

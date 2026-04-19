@@ -49,17 +49,19 @@ export type Pattern<T = unknown> =
   | { readonly [K in keyof T]?: Pattern<T[K]> };
 
 /** Extract capture bindings from a pattern matched against a scrutinee type. */
-export type ExtractCaptures<P, S> =
+export type ExtractCaptures<P, S> = ExtractCapturesImpl<P, Narrow<P, S>>;
+
+type ExtractCapturesImpl<P, S> =
   P extends LVar<infer N>
     ? Record<N, S>
   : P extends readonly any[]
     ? {} // TODO(v0.3): array/tuple patterns
   : P extends object
-    ? S extends object
+    ? [S] extends [object]
       ? UnionToIntersection<
           {
             [K in keyof P]: K extends keyof S
-              ? ExtractCaptures<P[K], S[K]>
+              ? ExtractCapturesImpl<P[K], S[K]>
               : {};
           }[keyof P]
         > extends infer I
@@ -67,6 +69,33 @@ export type ExtractCaptures<P, S> =
           : never
       : {}
   : {};
+
+/** Narrow the scrutinee type `S` by the pattern `P`. Drives handler value type. */
+export type Narrow<P, S> =
+  P extends LVar
+    ? S
+  : P extends { readonly [WILDCARD]: true }
+    ? S
+  : P extends (v: any) => v is infer U
+    ? Extract<S, U>
+  : P extends (...args: any) => any
+    ? S
+  : [P] extends [object]
+    ? [S] extends [object]
+      ? NarrowObject<P, S>
+      : S
+  : P extends S
+    ? P
+  : S;
+
+type NarrowObject<P, S> =
+  Extract<S, NarrowShape<P & object, S & object>> extends infer R
+    ? [R] extends [never] ? S : R
+    : never;
+
+type NarrowShape<P extends object, S extends object> = {
+  [K in keyof P]: K extends keyof S ? Narrow<P[K], S[K]> : unknown;
+};
 
 type UnionToIntersection<U> =
   (U extends any ? (k: U) => void : never) extends (k: infer I) => void
@@ -224,53 +253,116 @@ export function A(first: any, ...rest: any[]): any {
 // looser (but still correct) types.
 // -----------------------------------------------------------------------------
 
-type Arm<P, S, R> = readonly [P, (captures: ExtractCaptures<P, S>) => R];
+type Arm<P, S, R> = readonly [
+  P,
+  (captures: ExtractCaptures<P, S>, value: Narrow<P, S>) => R,
+];
 
-export function B<S, P1, R1>(
+export function B<S, const P1, R1>(
   scrutinee: S,
   a1: Arm<P1, S, R1>,
 ): R1;
-export function B<S, P1, R1, P2, R2>(
+export function B<S, const P1, R1, const P2, R2>(
   scrutinee: S,
   a1: Arm<P1, S, R1>, a2: Arm<P2, S, R2>,
 ): R1 | R2;
-export function B<S, P1, R1, P2, R2, P3, R3>(
+export function B<S, const P1, R1, const P2, R2, const P3, R3>(
   scrutinee: S,
   a1: Arm<P1, S, R1>, a2: Arm<P2, S, R2>, a3: Arm<P3, S, R3>,
 ): R1 | R2 | R3;
-export function B<S, P1, R1, P2, R2, P3, R3, P4, R4>(
+export function B<S, const P1, R1, const P2, R2, const P3, R3, const P4, R4>(
   scrutinee: S,
   a1: Arm<P1, S, R1>, a2: Arm<P2, S, R2>, a3: Arm<P3, S, R3>, a4: Arm<P4, S, R4>,
 ): R1 | R2 | R3 | R4;
-export function B<S, P1, R1, P2, R2, P3, R3, P4, R4, P5, R5>(
+export function B<S, const P1, R1, const P2, R2, const P3, R3, const P4, R4, const P5, R5>(
   scrutinee: S,
   a1: Arm<P1, S, R1>, a2: Arm<P2, S, R2>, a3: Arm<P3, S, R3>, a4: Arm<P4, S, R4>, a5: Arm<P5, S, R5>,
 ): R1 | R2 | R3 | R4 | R5;
-export function B<S, P1, R1, P2, R2, P3, R3, P4, R4, P5, R5, P6, R6>(
+export function B<S, const P1, R1, const P2, R2, const P3, R3, const P4, R4, const P5, R5, const P6, R6>(
   scrutinee: S,
   a1: Arm<P1, S, R1>, a2: Arm<P2, S, R2>, a3: Arm<P3, S, R3>, a4: Arm<P4, S, R4>, a5: Arm<P5, S, R5>, a6: Arm<P6, S, R6>,
 ): R1 | R2 | R3 | R4 | R5 | R6;
-export function B<S, P1, R1, P2, R2, P3, R3, P4, R4, P5, R5, P6, R6, P7, R7>(
+export function B<S, const P1, R1, const P2, R2, const P3, R3, const P4, R4, const P5, R5, const P6, R6, const P7, R7>(
   scrutinee: S,
   a1: Arm<P1, S, R1>, a2: Arm<P2, S, R2>, a3: Arm<P3, S, R3>, a4: Arm<P4, S, R4>, a5: Arm<P5, S, R5>, a6: Arm<P6, S, R6>, a7: Arm<P7, S, R7>,
 ): R1 | R2 | R3 | R4 | R5 | R6 | R7;
-export function B<S, P1, R1, P2, R2, P3, R3, P4, R4, P5, R5, P6, R6, P7, R7, P8, R8>(
+export function B<S, const P1, R1, const P2, R2, const P3, R3, const P4, R4, const P5, R5, const P6, R6, const P7, R7, const P8, R8>(
   scrutinee: S,
   a1: Arm<P1, S, R1>, a2: Arm<P2, S, R2>, a3: Arm<P3, S, R3>, a4: Arm<P4, S, R4>, a5: Arm<P5, S, R5>, a6: Arm<P6, S, R6>, a7: Arm<P7, S, R7>, a8: Arm<P8, S, R8>,
 ): R1 | R2 | R3 | R4 | R5 | R6 | R7 | R8;
 // Fallback for >8 arms: looser types
 export function B<S, R>(
   scrutinee: S,
-  ...arms: readonly (readonly [unknown, (captures: Record<string, unknown>) => R])[]
+  ...arms: readonly (readonly [unknown, (captures: Record<string, unknown>, value: S) => R])[]
 ): R;
 export function B(scrutinee: any, ...arms: readonly (readonly [unknown, AnyFn])[]): any {
   for (const [pattern, handler] of arms) {
     const captures: Record<string, unknown> = {};
     if (matchPattern(pattern, scrutinee, captures)) {
-      return (handler as AnyFn)(captures);
+      return (handler as AnyFn)(captures, scrutinee);
     }
   }
   throw new Error("B: no pattern matched and no default arm [_, fn] provided");
+}
+
+/** Remaining<S, Arms> — subtract each arm's narrowed slice from S. */
+type Remaining<S, Arms extends readonly (readonly [unknown, any])[]> =
+  Arms extends readonly [infer H, ...infer Rest]
+    ? H extends readonly [infer P, any]
+      ? Rest extends readonly (readonly [unknown, any])[]
+        ? Remaining<Exclude<S, Narrow<P, S>>, Rest>
+        : Exclude<S, Narrow<P, S>>
+      : S
+    : S;
+
+/** Return-type wrapper: R when exhaustive, a poisoned error type otherwise. */
+type ExhaustiveReturn<S, Arms extends readonly (readonly [unknown, any])[], R> =
+  [Remaining<S, Arms>] extends [never]
+    ? R
+    : {
+        readonly __NON_EXHAUSTIVE__: "B.exhaustive: some scrutinee cases are not covered";
+        readonly uncoveredCases: Remaining<S, Arms>;
+      };
+
+export namespace B {
+  // B.exhaustive: same runtime as B, but the return type becomes a poisoned
+  // error object if the arm set doesn't cover the scrutinee. Any attempt to
+  // use the return value will surface the error at the call site.
+  export function exhaustive<S, const P1, R1>(
+    scrutinee: S,
+    a1: Arm<P1, S, R1>,
+  ): ExhaustiveReturn<S, readonly [readonly [P1, any]], R1>;
+  export function exhaustive<S, const P1, R1, const P2, R2>(
+    scrutinee: S,
+    a1: Arm<P1, S, R1>, a2: Arm<P2, S, R2>,
+  ): ExhaustiveReturn<S, readonly [readonly [P1, any], readonly [P2, any]], R1 | R2>;
+  export function exhaustive<S, const P1, R1, const P2, R2, const P3, R3>(
+    scrutinee: S,
+    a1: Arm<P1, S, R1>, a2: Arm<P2, S, R2>, a3: Arm<P3, S, R3>,
+  ): ExhaustiveReturn<S, readonly [readonly [P1, any], readonly [P2, any], readonly [P3, any]], R1 | R2 | R3>;
+  export function exhaustive<S, const P1, R1, const P2, R2, const P3, R3, const P4, R4>(
+    scrutinee: S,
+    a1: Arm<P1, S, R1>, a2: Arm<P2, S, R2>, a3: Arm<P3, S, R3>, a4: Arm<P4, S, R4>,
+  ): ExhaustiveReturn<S, readonly [readonly [P1, any], readonly [P2, any], readonly [P3, any], readonly [P4, any]], R1 | R2 | R3 | R4>;
+  export function exhaustive<S, const P1, R1, const P2, R2, const P3, R3, const P4, R4, const P5, R5>(
+    scrutinee: S,
+    a1: Arm<P1, S, R1>, a2: Arm<P2, S, R2>, a3: Arm<P3, S, R3>, a4: Arm<P4, S, R4>, a5: Arm<P5, S, R5>,
+  ): ExhaustiveReturn<S, readonly [readonly [P1, any], readonly [P2, any], readonly [P3, any], readonly [P4, any], readonly [P5, any]], R1 | R2 | R3 | R4 | R5>;
+  export function exhaustive<S, const P1, R1, const P2, R2, const P3, R3, const P4, R4, const P5, R5, const P6, R6>(
+    scrutinee: S,
+    a1: Arm<P1, S, R1>, a2: Arm<P2, S, R2>, a3: Arm<P3, S, R3>, a4: Arm<P4, S, R4>, a5: Arm<P5, S, R5>, a6: Arm<P6, S, R6>,
+  ): ExhaustiveReturn<S, readonly [readonly [P1, any], readonly [P2, any], readonly [P3, any], readonly [P4, any], readonly [P5, any], readonly [P6, any]], R1 | R2 | R3 | R4 | R5 | R6>;
+  export function exhaustive<S, const P1, R1, const P2, R2, const P3, R3, const P4, R4, const P5, R5, const P6, R6, const P7, R7>(
+    scrutinee: S,
+    a1: Arm<P1, S, R1>, a2: Arm<P2, S, R2>, a3: Arm<P3, S, R3>, a4: Arm<P4, S, R4>, a5: Arm<P5, S, R5>, a6: Arm<P6, S, R6>, a7: Arm<P7, S, R7>,
+  ): ExhaustiveReturn<S, readonly [readonly [P1, any], readonly [P2, any], readonly [P3, any], readonly [P4, any], readonly [P5, any], readonly [P6, any], readonly [P7, any]], R1 | R2 | R3 | R4 | R5 | R6 | R7>;
+  export function exhaustive<S, const P1, R1, const P2, R2, const P3, R3, const P4, R4, const P5, R5, const P6, R6, const P7, R7, const P8, R8>(
+    scrutinee: S,
+    a1: Arm<P1, S, R1>, a2: Arm<P2, S, R2>, a3: Arm<P3, S, R3>, a4: Arm<P4, S, R4>, a5: Arm<P5, S, R5>, a6: Arm<P6, S, R6>, a7: Arm<P7, S, R7>, a8: Arm<P8, S, R8>,
+  ): ExhaustiveReturn<S, readonly [readonly [P1, any], readonly [P2, any], readonly [P3, any], readonly [P4, any], readonly [P5, any], readonly [P6, any], readonly [P7, any], readonly [P8, any]], R1 | R2 | R3 | R4 | R5 | R6 | R7 | R8>;
+  export function exhaustive(scrutinee: any, ...arms: readonly (readonly [unknown, AnyFn])[]): any {
+    return B(scrutinee, ...arms);
+  }
 }
 
 function matchPattern(
@@ -363,7 +455,7 @@ export function D(first: any, second?: any): any {
 const describeStack: (DescribeNode | ExamineNode)[][] = [];
 
 // -----------------------------------------------------------------------------
-// E  : Equals (curried) | Examine (xUnit it-block)
+// E  : Equals (curried) | Examine (xUnit it-block) | Comparisons (E.lt/gt/le/ge)
 // -----------------------------------------------------------------------------
 
 export function E<T>(a: T, b: T): boolean;
@@ -377,6 +469,46 @@ export function E(a: any, b?: any): any {
     return node;
   }
   return Object.is(a, b);
+}
+
+type Comparable = number | bigint | string;
+
+// WidenLiteral: turn a literal type back into its base so `E.lt(5)` returns
+// `(x: number) => boolean` rather than `(x: 5) => boolean`.
+type WidenLiteral<T> =
+  T extends number ? number
+  : T extends bigint ? bigint
+  : T extends string ? string
+  : T;
+
+export namespace E {
+  // Strictly less-than. Curries on single arg.
+  export function lt<T extends Comparable>(a: T, b: T): boolean;
+  export function lt<T extends Comparable>(a: T): (b: WidenLiteral<T>) => boolean;
+  export function lt(a: any, b?: any): any {
+    return arguments.length === 1 ? (x: any) => x < a : a < b;
+  }
+
+  // Strictly greater-than.
+  export function gt<T extends Comparable>(a: T, b: T): boolean;
+  export function gt<T extends Comparable>(a: T): (b: WidenLiteral<T>) => boolean;
+  export function gt(a: any, b?: any): any {
+    return arguments.length === 1 ? (x: any) => x > a : a > b;
+  }
+
+  // Less-than-or-equal.
+  export function le<T extends Comparable>(a: T, b: T): boolean;
+  export function le<T extends Comparable>(a: T): (b: WidenLiteral<T>) => boolean;
+  export function le(a: any, b?: any): any {
+    return arguments.length === 1 ? (x: any) => x <= a : a <= b;
+  }
+
+  // Greater-than-or-equal.
+  export function ge<T extends Comparable>(a: T, b: T): boolean;
+  export function ge<T extends Comparable>(a: T): (b: WidenLiteral<T>) => boolean;
+  export function ge(a: any, b?: any): any {
+    return arguments.length === 1 ? (x: any) => x >= a : a >= b;
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -612,7 +744,7 @@ export function Q(x: any): number {
 type RWOpts = { readonly write: string | Uint8Array } | { readonly append: string | Uint8Array };
 
 export function R(condition: boolean, message?: string): asserts condition is false;
-export function R<T = unknown>(spec: string): Promise<T>;
+export function R<T = unknown>(spec: string, base?: string): Promise<T>;
 export function R(path: string, encoding: BufferEncoding): Promise<string>;
 export function R(path: string, opts: RWOpts): Promise<void>;
 export async function R(first: any, second?: any): Promise<any> {
@@ -628,7 +760,16 @@ export async function R(first: any, second?: any): Promise<any> {
   }
   const looksLikeModule =
     /\.(m|c)?[jt]sx?$/.test(first) || (!first.includes("/") && !first.includes("."));
-  if (looksLikeModule && second === undefined) return import(first);
+  if (looksLikeModule && (second === undefined || typeof second === "string" && /^(file|https?):\/\//.test(second))) {
+    // Module import. If `second` is a base URL (e.g. import.meta.url), resolve
+    // relative paths against it so R("./foo", import.meta.url) works like
+    // a top-level `import "./foo"` from the caller's file.
+    if (typeof second === "string" && first.startsWith(".")) {
+      const resolved = new URL(first, second).href;
+      return import(resolved);
+    }
+    return import(first);
+  }
   const { promises: fs } = await import("node:fs");
   if (typeof second === "string") return fs.readFile(first, second as BufferEncoding);
   return fs.readFile(first);
@@ -811,9 +952,18 @@ export function W(first: any, second: any, third?: number): any {
 // -----------------------------------------------------------------------------
 
 export function X(strings: TemplateStringsArray, ...values: unknown[]): Promise<string>;
+export function X(relation: string): Substitution[];
 export function X(relation: string, ...terms: readonly unknown[]): Substitution[];
 export function X(first: any, ...rest: any[]): any {
   if (Array.isArray(first) && "raw" in first) return executeShell(first as TemplateStringsArray, rest, "/bin/bash");
+  // 1-arg form: match any fact with this relation, regardless of arity.
+  // Returns one empty substitution per matching fact (count-friendly; Q() returns the number).
+  if (rest.length === 0) {
+    const kb = currentKB();
+    const out: Substitution[] = [];
+    for (const fact of kb) if (fact.relation === first) out.push({});
+    return out;
+  }
   return solve([{ __fact: true, relation: first, terms: rest }]);
 }
 
@@ -911,7 +1061,7 @@ export function Z(...arrs: readonly (readonly unknown[])[]): unknown[][] {
 // =============================================================================
 
 export type TestStatus = "passed" | "failed" | "skipped";
-export type ScopeGranularity = "given" | "state" | "when" | "then";
+export type ScopeGranularity = "given" | "state" | "when" | "then" | "inherit";
 
 export interface TestResult {
   readonly path: readonly string[];
@@ -929,12 +1079,46 @@ export interface TestReport {
 }
 
 export interface RunOpts {
-  /** Where to open a fresh KB scope. Default: "then" (per-assertion isolation). */
+  /**
+   * Where to open a fresh KB scope.
+   *   - "given"   — fresh KB per Given block
+   *   - "state"   — fresh KB per state within a Given
+   *   - "when"    — fresh KB per When
+   *   - "then"    — fresh KB per assertion (default; maximum isolation)
+   *   - "inherit" — no new KB; inherits the ambient KB from the caller
+   *
+   * Use "inherit" when you've asserted facts in an outer `withKB` scope and
+   * want the test tree to query them rather than running against a fresh KB.
+   */
   readonly kbScope?: ScopeGranularity;
   /** Suppress console output; results still returned. */
   readonly silent?: boolean;
   /** Filter which test paths run. Receives full path, returns true to include. */
   readonly filter?: (path: readonly string[]) => boolean;
+  /**
+   * How to render output. Pass the name of a built-in ("pretty", "tap",
+   * "junit", "null") or a custom Reporter object. Default: "pretty".
+   * The "null" reporter emits nothing; useful for programmatic runs.
+   */
+  readonly reporter?: ReporterName | Reporter;
+  /** Sink for reporter output. Default: process.stdout.write (or console.log for null-like sinks). */
+  readonly write?: (chunk: string) => void;
+}
+
+export type ReporterName = "pretty" | "tap" | "junit" | "null";
+
+/** Reporter hooks. All methods are optional; missing hooks are no-ops. */
+export interface Reporter {
+  readonly name: string;
+  onRunStart?(ctx: ReporterCtx): void;
+  onSuiteEnter?(node: TestNode, path: readonly string[], ctx: ReporterCtx): void;
+  onResult?(result: TestResult, ctx: ReporterCtx): void;
+  onRunEnd?(report: TestReport, ctx: ReporterCtx): void;
+}
+
+export interface ReporterCtx {
+  readonly write: (chunk: string) => void;
+  readonly startedAt: number;
 }
 
 /** Execute a test tree (or array of trees) and return a structured report. */
@@ -945,28 +1129,34 @@ export async function run(
   const trees = Array.isArray(tree) ? tree : [tree as TestNode];
   const results: TestResult[] = [];
   const kbScope = opts.kbScope ?? "then";
-  const log = opts.silent ? () => {} : console.log.bind(console);
+  const write = opts.write ?? ((s: string) => process.stdout.write(s));
+  const reporter: Reporter = opts.silent
+    ? nullReporter
+    : resolveReporter(opts.reporter ?? "pretty");
   const start = performance.now();
+  const rCtx: ReporterCtx = { write, startedAt: start };
+
+  reporter.onRunStart?.(rCtx);
 
   for (const t of trees) {
-    await runNode(t, [], results, { kbScope, filter: opts.filter, log });
+    await runNode(t, [], results, { kbScope, filter: opts.filter, reporter, rCtx });
   }
 
   const passed  = results.filter(r => r.status === "passed").length;
   const failed  = results.filter(r => r.status === "failed").length;
   const skipped = results.filter(r => r.status === "skipped").length;
   const durationMs = performance.now() - start;
+  const report: TestReport = { passed, failed, skipped, durationMs, results };
 
-  if (!opts.silent) {
-    log(`\n${passed} passed, ${failed} failed, ${skipped} skipped  (${durationMs.toFixed(1)}ms)`);
-  }
-  return { passed, failed, skipped, durationMs, results };
+  reporter.onRunEnd?.(report, rCtx);
+  return report;
 }
 
 interface RunCtx {
   readonly kbScope: ScopeGranularity;
   readonly filter?: (path: readonly string[]) => boolean;
-  readonly log: (...args: unknown[]) => void;
+  readonly reporter: Reporter;
+  readonly rCtx: ReporterCtx;
 }
 
 async function runNode(
@@ -978,14 +1168,16 @@ async function runNode(
   switch (node.kind) {
     case "describe": {
       const p = [...path, node.label];
-      ctx.log(`${"  ".repeat(path.length)}${node.label}`);
+      ctx.reporter.onSuiteEnter?.(node, p, ctx.rCtx);
       for (const child of node.children) await runNode(child, p, results, ctx);
       return;
     }
     case "examine": {
       const p = [...path, node.label];
       if (ctx.filter && !ctx.filter(p)) {
-        results.push({ path: p, status: "skipped", durationMs: 0 });
+        const r: TestResult = { path: p, status: "skipped", durationMs: 0 };
+        results.push(r);
+        ctx.reporter.onResult?.(r, ctx.rCtx);
         return;
       }
       await executeCheck(p, () => node.body(), results, ctx);
@@ -993,7 +1185,7 @@ async function runNode(
     }
     case "given": {
       const p = [...path, `Given ${node.label}`];
-      ctx.log(`${"  ".repeat(path.length)}Given ${node.label}`);
+      ctx.reporter.onSuiteEnter?.(node, p, ctx.rCtx);
       const wrap = ctx.kbScope === "given"
         ? <R>(fn: () => Promise<R>) => withKB([], fn)
         : <R>(fn: () => Promise<R>) => fn();
@@ -1012,21 +1204,24 @@ async function runState(
   ctx: RunCtx,
 ): Promise<void> {
   const p = [...path, state.label];
-  ctx.log(`${"  ".repeat(path.length)}${state.label}`);
+  // synthesize a pseudo-node for reporter onSuiteEnter
+  ctx.reporter.onSuiteEnter?.({ kind: "describe", label: state.label, children: [] }, p, ctx.rCtx);
   const wrap = ctx.kbScope === "state"
     ? <R>(fn: () => Promise<R>) => withKB([], fn)
     : <R>(fn: () => Promise<R>) => fn();
   await wrap(async () => {
     for (const when of state.whens) {
       const wp = [...p, `When ${when.label}`];
-      ctx.log(`${"  ".repeat(path.length + 1)}When ${when.label}`);
+      ctx.reporter.onSuiteEnter?.({ kind: "describe", label: `When ${when.label}`, children: [] }, wp, ctx.rCtx);
       const whenWrap = ctx.kbScope === "when"
         ? <R>(fn: () => Promise<R>) => withKB([], fn)
         : <R>(fn: () => Promise<R>) => fn();
       await whenWrap(async () => {
         const tp = [...wp, `Then ${when.then.label}`];
         if (ctx.filter && !ctx.filter(tp)) {
-          results.push({ path: tp, status: "skipped", durationMs: 0 });
+          const r: TestResult = { path: tp, status: "skipped", durationMs: 0 };
+          results.push(r);
+          ctx.reporter.onResult?.(r, ctx.rCtx);
           return;
         }
         const exec = () => (when.then.check as AnyFn)(state.fixture);
@@ -1047,20 +1242,127 @@ async function executeCheck(
   ctx: RunCtx,
 ): Promise<void> {
   const t0 = performance.now();
-  const indent = "  ".repeat(path.length);
   try {
     const r = exec();
     if (isThenable(r)) await r;
     const durationMs = performance.now() - t0;
-    results.push({ path, status: "passed", durationMs });
-    ctx.log(`${indent}\u2713 ${path[path.length - 1]}  (${durationMs.toFixed(1)}ms)`);
+    const result: TestResult = { path, status: "passed", durationMs };
+    results.push(result);
+    ctx.reporter.onResult?.(result, ctx.rCtx);
   } catch (e) {
     const durationMs = performance.now() - t0;
     const error = e instanceof Error ? e : new Error(String(e));
-    results.push({ path, status: "failed", error, durationMs });
-    ctx.log(`${indent}\u2717 ${path[path.length - 1]}  (${durationMs.toFixed(1)}ms)`);
-    ctx.log(`${indent}  ${error.message}`);
+    const result: TestResult = { path, status: "failed", error, durationMs };
+    results.push(result);
+    ctx.reporter.onResult?.(result, ctx.rCtx);
   }
+}
+
+// -----------------------------------------------------------------------------
+// Built-in reporters
+// -----------------------------------------------------------------------------
+
+function resolveReporter(r: ReporterName | Reporter): Reporter {
+  if (typeof r !== "string") return r;
+  switch (r) {
+    case "pretty": return prettyReporter;
+    case "tap":    return tapReporter;
+    case "junit":  return junitReporter;
+    case "null":   return nullReporter;
+  }
+}
+
+export const nullReporter: Reporter = { name: "null" };
+
+/** Pretty reporter — mirrors the pre-0.4 default output. */
+export const prettyReporter: Reporter = {
+  name: "pretty",
+  onSuiteEnter(_node, path, ctx) {
+    const indent = "  ".repeat(path.length - 1);
+    ctx.write(`${indent}${path[path.length - 1]}\n`);
+  },
+  onResult(result, ctx) {
+    const indent = "  ".repeat(result.path.length);
+    const mark = result.status === "passed" ? "\u2713"
+               : result.status === "failed" ? "\u2717"
+               : "\u25CB";
+    const label = result.path[result.path.length - 1];
+    const duration = result.status === "skipped" ? "" : `  (${result.durationMs.toFixed(1)}ms)`;
+    ctx.write(`${indent}${mark} ${label}${duration}\n`);
+    if (result.status === "failed" && result.error) {
+      ctx.write(`${indent}  ${result.error.message}\n`);
+    }
+  },
+  onRunEnd(report, ctx) {
+    ctx.write(`\n${report.passed} passed, ${report.failed} failed, ${report.skipped} skipped  (${report.durationMs.toFixed(1)}ms)\n`);
+  },
+};
+
+/** TAP reporter — TAP version 14 producer. CI-friendly. */
+export const tapReporter: Reporter = {
+  name: "tap",
+  onRunStart(ctx) {
+    ctx.write(`TAP version 14\n`);
+  },
+  onResult(result, ctx) {
+    (tapReporter as any)._n = ((tapReporter as any)._n ?? 0) + 1;
+    const n = (tapReporter as any)._n;
+    const label = result.path.join(" > ");
+    if (result.status === "passed") {
+      ctx.write(`ok ${n} - ${label}\n`);
+    } else if (result.status === "skipped") {
+      ctx.write(`ok ${n} - ${label} # SKIP\n`);
+    } else {
+      ctx.write(`not ok ${n} - ${label}\n`);
+      if (result.error) {
+        ctx.write(`  ---\n`);
+        ctx.write(`  message: ${JSON.stringify(result.error.message)}\n`);
+        ctx.write(`  severity: fail\n`);
+        ctx.write(`  ...\n`);
+      }
+    }
+  },
+  onRunEnd(report, ctx) {
+    const total = report.passed + report.failed + report.skipped;
+    ctx.write(`1..${total}\n`);
+    ctx.write(`# tests ${total}\n`);
+    ctx.write(`# pass  ${report.passed}\n`);
+    ctx.write(`# fail  ${report.failed}\n`);
+    ctx.write(`# skip  ${report.skipped}\n`);
+    (tapReporter as any)._n = 0;
+  },
+};
+
+/** JUnit XML reporter — compatible with Jenkins, GitLab, GitHub Actions. */
+export const junitReporter: Reporter = {
+  name: "junit",
+  onRunStart(ctx) {
+    ctx.write(`<?xml version="1.0" encoding="UTF-8"?>\n`);
+  },
+  onRunEnd(report, ctx) {
+    const total = report.passed + report.failed + report.skipped;
+    const time = (report.durationMs / 1000).toFixed(3);
+    ctx.write(`<testsuite name="alphabetica" tests="${total}" failures="${report.failed}" skipped="${report.skipped}" time="${time}">\n`);
+    for (const r of report.results) {
+      const name = escXml(r.path.join(" > "));
+      const t = (r.durationMs / 1000).toFixed(3);
+      if (r.status === "passed") {
+        ctx.write(`  <testcase name="${name}" time="${t}"/>\n`);
+      } else if (r.status === "skipped") {
+        ctx.write(`  <testcase name="${name}" time="${t}"><skipped/></testcase>\n`);
+      } else {
+        const msg = escXml(r.error?.message ?? "failed");
+        ctx.write(`  <testcase name="${name}" time="${t}"><failure message="${msg}"/></testcase>\n`);
+      }
+    }
+    ctx.write(`</testsuite>\n`);
+  },
+};
+
+function escXml(s: string): string {
+  return s.replace(/[<>&"']/g, (c) => ({
+    "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&apos;",
+  }[c]!));
 }
 
 // =============================================================================
@@ -1070,6 +1372,7 @@ async function executeCheck(
 export const ALPHABETICA = {
   _, A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z,
   run, withKB, scope, currentKB, goal,
+  prettyReporter, tapReporter, junitReporter, nullReporter,
   MODULE_NAME, MODULE_DOC, DOC, WILDCARD, BOUNCE,
 } as const;
 

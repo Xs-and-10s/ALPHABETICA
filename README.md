@@ -83,18 +83,76 @@ need a zero-build-step dependency.
 
 ## Quick tour
 
-### Pattern matching with typed captures
+### Pattern matching with typed captures and narrowing
 
 ```ts
 type User = { kind: "user"; name: string };
 type Admin = { kind: "admin"; name: string; perms: readonly string[] };
 
 const classify = (v: User | Admin) => B(v,
-  [{ kind: "user",  name: _("n") }, ({ n }) => `user ${n}`],
-  //                                    ^ n inferred as string
-  [{ kind: "admin", name: _("n") }, ({ n }) => `admin ${n}`],
+  [{ kind: "user" },  (_c, u) => `user ${u.name}`],
+  //                       ^ narrowed to User
+  [{ kind: "admin" }, (_c, a) => `admin ${a.name}, ${a.perms.length} perms`],
+  //                       ^ narrowed to Admin
 );
 ```
+
+Each arm's handler receives two arguments: `captures` (any LVars in the
+pattern) and the narrowed scrutinee. Both work together:
+
+```ts
+type Event =
+  | { type: "click"; x: number; y: number }
+  | { type: "key"; key: string };
+
+const handle = (e: Event) => B(e,
+  [{ type: "click", x: _("x") }, ({ x }, ev) => `click ${x},${ev.y}`],
+  //                                ^ x: number   ^ ev: click variant
+  [{ type: "key" }, (_c, ev) => `key ${ev.key}`],
+);
+```
+
+Patterns narrow when they can:
+
+| Pattern form                   | Narrowing behavior                        |
+|--------------------------------|-------------------------------------------|
+| Literal (`5`, `"red"`)         | Narrows S to that literal if S is a union |
+| Discriminant object            | `Extract<S, {k: "v"}>` — standard variant |
+| Type-guard `(v): v is T`       | `Extract<S, T>`                           |
+| Regular predicate              | S (no narrowing)                          |
+| Wildcard `_` / LVar `_("n")`   | S (captures but doesn't narrow)           |
+
+### Exhaustiveness checking
+
+Use `B.exhaustive` when you want the compiler to guarantee every case is
+handled:
+
+```ts
+const classify = (v: User | Admin): string => B.exhaustive(v,
+  [{ kind: "user" },  (_c, u) => u.name],
+  [{ kind: "admin" }, (_c, a) => a.name],
+);
+// ✓ compiles
+
+const incomplete = (v: User | Admin): string => B.exhaustive(v,
+  [{ kind: "user" }, (_c, u) => u.name],
+);
+// ✗ Type '{ __NON_EXHAUSTIVE__: ...; uncoveredCases: Admin }'
+//   is not assignable to type 'string'.
+```
+
+Exhaustiveness is enforced via the return type: if arms don't cover the
+scrutinee, the return becomes a poisoned object whose `uncoveredCases` field
+lists the missing variants. **Assign the return to a typed binding** or pass
+it to a typed parameter for the error to surface.
+
+At runtime `B.exhaustive` behaves exactly like `B` — the check is type-only.
+Add a new variant to a union later and forget to handle it, and `tsc --noEmit`
+catches it immediately.
+
+**Requires TypeScript 5.0+** for `const` type parameters. The no-build
+`alphabetica.mjs` version provides `B.exhaustive` as a runtime alias to `B`
+without the compile-time guarantee.
 
 ### BDD tests with fixture injection
 

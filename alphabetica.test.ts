@@ -122,6 +122,76 @@ const xunit = D("ALPHABETICA", () => {
       ]);
       A(E(r, "bob-30"));
     });
+    E("handler receives narrowed scrutinee as 2nd arg", () => {
+      type User = { kind: "user"; name: string };
+      type Admin = { kind: "admin"; name: string; perms: readonly string[] };
+      const classify = (v: User | Admin) =>
+        B(
+          v,
+          [{ kind: "user" }, (_c, u) => `user ${u.name}`],
+          [{ kind: "admin" }, (_c, a) => `admin ${a.name} (${a.perms.length})`],
+        );
+      A(E(classify({ kind: "user", name: "alice" }), "user alice"));
+      A(
+        E(
+          classify({ kind: "admin", name: "bob", perms: ["w", "r"] }),
+          "admin bob (2)",
+        ),
+      );
+    });
+    E("captures AND narrowed value together", () => {
+      type Event =
+        | { type: "click"; x: number; y: number }
+        | { type: "key"; key: string };
+      const handle = (e: Event) =>
+        B(
+          e,
+          [{ type: "click", x: _("x") }, ({ x }, ev) => `click ${x},${ev.y}`],
+          [{ type: "key" }, (_c, ev) => `key ${ev.key}`],
+        );
+      A(E(handle({ type: "click", x: 10, y: 20 }), "click 10,20"));
+      A(E(handle({ type: "key", key: "a" }), "key a"));
+    });
+    E("type-guard predicate narrows", () => {
+      const isStr = (v: unknown): v is string => typeof v === "string";
+      const r = B<
+        string | number,
+        /* a1 */ typeof isStr,
+        string,
+        /* a2 */ typeof _,
+        string
+      >(
+        "hello" as string | number,
+        [isStr, (_c, s) => `str(${s.length})`],
+        [_, () => "other"],
+      );
+      A(E(r, "str(5)"));
+    });
+    E("B.exhaustive covers full union", () => {
+      type User = { kind: "user"; name: string };
+      type Admin = { kind: "admin"; name: string; perms: readonly string[] };
+      const classify = (v: User | Admin) =>
+        B.exhaustive(
+          v,
+          [{ kind: "user" }, (_c, u) => `u:${u.name}`],
+          [{ kind: "admin" }, (_c, a) => `a:${a.name}`],
+        );
+      A(E(classify({ kind: "user", name: "alice" }), "u:alice"));
+      A(E(classify({ kind: "admin", name: "bob", perms: [] }), "a:bob"));
+    });
+    E("B.exhaustive with wildcard default", () => {
+      type Color = "red" | "green" | "blue";
+      const name = (c: Color) =>
+        B.exhaustive(
+          c,
+          ["red", () => "R"],
+          ["green", () => "G"],
+          ["blue", () => "B"],
+        );
+      A(E(name("red"), "R"));
+      A(E(name("green"), "G"));
+      A(E(name("blue"), "B"));
+    });
   });
 
   D("C  Compose (right-to-left) / Class", () => {
@@ -172,6 +242,28 @@ const xunit = D("ALPHABETICA", () => {
       const isFive = E(5);
       A(isFive(5));
       A(N(isFive(6)));
+    });
+    E("E.lt / gt / le / ge — 2-arg form", () => {
+      A(E.lt(3, 5));
+      A(N(E.lt(5, 3)));
+      A(E.gt(5, 3));
+      A(E.le(5, 5));
+      A(E.ge(5, 5));
+      A(N(E.lt(5, 5)));
+      A(N(E.gt(5, 5)));
+    });
+    E("E.lt / gt / le / ge — curried form reads naturally", () => {
+      const lessThan5 = E.lt(5);
+      A(lessThan5(3)); // 3 < 5 ✓
+      A(N(lessThan5(5)));
+      const atLeast5 = E.ge(5);
+      A(atLeast5(5));
+      A(atLeast5(6));
+      A(N(atLeast5(4)));
+    });
+    E("E comparisons work on strings and bigints", () => {
+      A(E.lt("apple", "banana"));
+      A(E.gt(10n, 5n));
     });
   });
 
@@ -467,6 +559,17 @@ const xunit = D("ALPHABETICA", () => {
         A(E(kids[0]!.c, "bob"));
       });
     });
+    E("X(rel) 1-arg form counts facts of any arity", () => {
+      withKB([], () => {
+        F("parent", "alice", "bob");
+        F("parent", "bob", "carol");
+        F("color", "red");
+        // 1-arg X returns one empty substitution per match — Q-friendly
+        A(E(Q(X("parent")), 2));
+        A(E(Q(X("color")), 1));
+        A(E(Q(X("nonexistent")), 0));
+      });
+    });
     E("S solves conjoined goals (grandparent rule)", () => {
       withKB([], () => {
         F("parent", "alice", "bob");
@@ -527,6 +630,171 @@ const xunit = D("ALPHABETICA", () => {
         const results = S([goal("color", _("c")), N(goal("color", "red"))]);
         A(E(results.length, 0));
       });
+    });
+  });
+
+  D("Runner kbScope: inherit", () => {
+    E("inherit preserves outer KB facts inside run()", async () => {
+      await withKB([], async () => {
+        F("outer", "hello");
+        // Build a tiny suite that queries the outer KB
+        const suite = G([
+          "outer-visible",
+          [
+            "state",
+            {},
+            W(
+              "fact-reachable",
+              T("outer fact is visible", () => {
+                A(E(X("outer", _("v"))[0]!.v, "hello"));
+              }),
+            ),
+          ],
+        ]);
+        const report = await run(suite, { kbScope: "inherit", silent: true });
+        A(E(report.failed, 0));
+        A(E(report.passed, 1));
+      });
+    });
+    E("default (then) still isolates per assertion", async () => {
+      await withKB([], async () => {
+        F("outer", "visible");
+        const suite = G([
+          "isolated",
+          [
+            "state",
+            {},
+            W(
+              "fact-invisible",
+              T("outer fact is NOT visible under then-scope", () => {
+                // Default kbScope is "then" — fresh KB per assertion
+                A(E(X("outer", _("v")).length, 0));
+              }),
+            ),
+          ],
+        ]);
+        const report = await run(suite, { silent: true });
+        A(E(report.passed, 1));
+      });
+    });
+  });
+
+  D("Runner reporters", () => {
+    E("TAP reporter emits version and plan", async () => {
+      const suite = G([
+        "suite",
+        [
+          "state",
+          {},
+          W(
+            "w",
+            T("t passes", () => A(true)),
+          ),
+        ],
+      ]);
+      let out = "";
+      const write = (s: string) => {
+        out += s;
+      };
+      await run(suite, { reporter: "tap", write });
+      A(
+        out.startsWith("TAP version 14"),
+        `expected TAP header, got ${out.slice(0, 40)}`,
+      );
+      A(out.includes("ok 1"), "expected 'ok 1' line");
+      A(out.includes("1..1"), "expected plan line");
+    });
+    E("TAP reporter emits 'not ok' on failure", async () => {
+      const suite = G([
+        "suite",
+        [
+          "state",
+          {},
+          W(
+            "w",
+            T("t fails", () => A(false, "nope")),
+          ),
+        ],
+      ]);
+      let out = "";
+      await run(suite, {
+        reporter: "tap",
+        write: (s) => {
+          out += s;
+        },
+      });
+      A(out.includes("not ok 1"));
+      A(out.includes("nope"));
+    });
+    E("JUnit reporter emits valid XML skeleton", async () => {
+      const suite = G([
+        "suite",
+        [
+          "state",
+          {},
+          W(
+            "w",
+            T("t", () => A(true)),
+          ),
+        ],
+      ]);
+      let out = "";
+      await run(suite, {
+        reporter: "junit",
+        write: (s) => {
+          out += s;
+        },
+      });
+      A(out.startsWith("<?xml"));
+      A(out.includes("<testsuite"));
+      A(out.includes("<testcase"));
+      A(out.includes("</testsuite>"));
+    });
+    E("null reporter emits nothing", async () => {
+      const suite = G([
+        "suite",
+        [
+          "state",
+          {},
+          W(
+            "w",
+            T("t", () => A(true)),
+          ),
+        ],
+      ]);
+      let out = "";
+      const report = await run(suite, {
+        reporter: "null",
+        write: (s) => {
+          out += s;
+        },
+      });
+      A(E(out, ""));
+      A(E(report.passed, 1));
+    });
+    E("custom Reporter object works", async () => {
+      const events: string[] = [];
+      const custom = {
+        name: "custom",
+        onRunStart: () => events.push("start"),
+        onResult: (r: any) => events.push(`result:${r.status}`),
+        onRunEnd: () => events.push("end"),
+      };
+      const suite = G([
+        "suite",
+        [
+          "state",
+          {},
+          W(
+            "w",
+            T("t", () => A(true)),
+          ),
+        ],
+      ]);
+      await run(suite, { reporter: custom, write: () => {} });
+      A(E(events[0], "start"));
+      A(events.includes("result:passed"));
+      A(E(events[events.length - 1], "end"));
     });
   });
 

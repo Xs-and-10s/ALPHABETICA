@@ -75,6 +75,30 @@ const xunit = D("ALPHABETICA (JS)", () => {
       );
       A(E(r, "bob-30"));
     });
+    E("handler receives scrutinee as 2nd arg", () => {
+      const classify = (v) => B(v,
+        [{ kind: "user" },  (_c, u) => `user ${u.name}`],
+        [{ kind: "admin" }, (_c, a) => `admin ${a.name}`],
+      );
+      A(E(classify({ kind: "user", name: "alice" }), "user alice"));
+      A(E(classify({ kind: "admin", name: "bob" }), "admin bob"));
+    });
+    E("captures AND value together", () => {
+      const handle = (e) => B(e,
+        [{ type: "click", x: _("x") }, ({ x }, ev) => `click ${x},${ev.y}`],
+        [{ type: "key" }, (_c, ev) => `key ${ev.key}`],
+      );
+      A(E(handle({ type: "click", x: 10, y: 20 }), "click 10,20"));
+      A(E(handle({ type: "key", key: "a" }), "key a"));
+    });
+    E("B.exhaustive runs same as B", () => {
+      const classify = (v) => B.exhaustive(v,
+        [{ kind: "user" },  (_c, u) => `u:${u.name}`],
+        [{ kind: "admin" }, (_c, a) => `a:${a.name}`],
+      );
+      A(E(classify({ kind: "user", name: "alice" }), "u:alice"));
+      A(E(classify({ kind: "admin", name: "bob" }), "a:bob"));
+    });
   });
 
   D("C  Compose / Class", () => {
@@ -113,6 +137,15 @@ const xunit = D("ALPHABETICA (JS)", () => {
       const isFive = E(5);
       A(isFive(5));
       A(N(isFive(6)));
+    });
+    E("E.lt / gt / le / ge", () => {
+      A(E.lt(3, 5));
+      A(E.gt(5, 3));
+      A(E.le(5, 5));
+      A(E.ge(5, 5));
+      const lessThan5 = E.lt(5);
+      A(lessThan5(3));
+      A(N(lessThan5(5)));
     });
   });
 
@@ -334,6 +367,16 @@ const xunit = D("ALPHABETICA (JS)", () => {
         const kids = X("parent", "alice", _("c"));
         A(E(kids.length, 1));
         A(E(kids[0].c, "bob"));
+      });
+    });
+    E("X(rel) 1-arg counts facts", () => {
+      withKB([], () => {
+        F("parent", "alice", "bob");
+        F("parent", "bob", "carol");
+        F("color", "red");
+        A(E(Q(X("parent")), 2));
+        A(E(Q(X("color")), 1));
+        A(E(Q(X("none")), 0));
       });
     });
     E("S solves conjoined goals", () => {

@@ -1,6 +1,6 @@
 {
   "name": "@xs-and-10s/alphabetica",
-  "version": "0.2.0-alpha.0",
+  "version": "0.4.0-alpha.0",
   "description": "26 letters plus _, one per utility. A tiny, dependency-free combinator library for testing, DevOps scripting, code golf, and sandboxed execution.",
   "keywords": [
     "testing",
@@ -51,8 +51,9 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "test": "tsx alphabetica.test.ts && node alphabetica.test.mjs",
+    "test": "tsx alphabetica.test.ts && tsx exhaustive.test.ts && node alphabetica.test.mjs",
     "test:ts": "tsx alphabetica.test.ts",
+    "test:exhaustive": "tsx exhaustive.test.ts",
     "test:mjs": "node alphabetica.test.mjs",
     "clean": "rm -rf dist",
     "prepublishOnly": "npm run clean && npm run typecheck && npm run test && npm run build"
