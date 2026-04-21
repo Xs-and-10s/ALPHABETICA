@@ -263,6 +263,80 @@ const xunit = D("ALPHABETICA", () => {
       );
       A(E(r, "2:hello=42"));
     });
+    E(
+      "array pattern: literal at position 0 narrows heterogeneous tuple union",
+      () => {
+        type Shape =
+          | readonly ["circle", number]
+          | readonly ["square", number, number]
+          | readonly ["text", string];
+        // Use a function param so TS doesn't CF-narrow the scrutinee at the call site.
+        const describe = (s: Shape) =>
+          B(
+            s,
+            [["circle", _("r")], ({ r }) => r * 2], // r: number
+            [["square", _("w"), _("h")], ({ w, h }) => w * h],
+            [["text", _("t")], ({ t }) => t.length], // t: string
+          );
+        A(E(describe(["circle", 10] as Shape), 20));
+        A(E(describe(["text", "hi"] as Shape), 2));
+      },
+    );
+    E(
+      "object pattern: filters out variants that don't have the discriminant key",
+      () => {
+        type Msg =
+          | { kind: "ok"; data: number }
+          | { kind: "err"; reason: string }
+          | { type: "legacy"; v: number }; // no `kind` at all
+        const handle = (m: Msg) =>
+          B(
+            m,
+            [{ kind: "ok" }, (_c, v) => v.data], // v: {kind:"ok", data:number}
+            [{ kind: "err" }, (_c, v) => v.reason.length], // v: {kind:"err", reason:string}
+            [{ type: "legacy" }, (_c, v) => v.v], // v: legacy variant
+          );
+        A(E(handle({ kind: "ok", data: 42 } as Msg), 42));
+        A(E(handle({ kind: "err", reason: "oops" } as Msg), 4));
+        A(E(handle({ type: "legacy", v: 7 } as Msg), 7));
+      },
+    );
+    E("object pattern: nested two-level narrowing", () => {
+      type Outer =
+        | {
+            tag: "A";
+            inner:
+              | { kind: "user"; name: string }
+              | { kind: "admin"; perms: string[] };
+          }
+        | { tag: "B"; value: number };
+      const handle = (o: Outer) =>
+        B(
+          o,
+          [
+            { tag: "A", inner: { kind: "user" } },
+            (_c, v) => `u:${v.inner.name}`,
+          ],
+          [
+            { tag: "A", inner: { kind: "admin" } },
+            (_c, v) => `a:${v.inner.perms.length}`,
+          ],
+          [{ tag: "B" }, (_c, v) => `b:${v.value}`],
+        );
+      A(
+        E(
+          handle({ tag: "A", inner: { kind: "user", name: "alice" } } as Outer),
+          "u:alice",
+        ),
+      );
+      A(
+        E(
+          handle({ tag: "A", inner: { kind: "admin", perms: ["x"] } } as Outer),
+          "a:1",
+        ),
+      );
+      A(E(handle({ tag: "B", value: 9 } as Outer), "b:9"));
+    });
   });
 
   D("C  Compose (right-to-left) / Class", () => {
@@ -287,6 +361,29 @@ const xunit = D("ALPHABETICA", () => {
       const p = new (Point as any)(3, 4);
       A(E(p.sum(), 7));
       A(E((Point as any).name, "Point"));
+    });
+    E("C supports `extends` for prototype inheritance", () => {
+      class Animal {
+        speak() {
+          return "...";
+        }
+      }
+      const Dog = C("Dog", {
+        extends: Animal,
+        methods: {
+          speak(this: any) {
+            return "woof";
+          },
+          super_speak(this: any) {
+            return Animal.prototype.speak.call(this);
+          },
+        },
+      } as any);
+      const d = new (Dog as any)();
+      A(E(d instanceof Animal, true));
+      A(E(d.speak(), "woof"));
+      A(E(d.super_speak(), "..."));
+      A(E((Dog as any).name, "Dog"));
     });
   });
 
@@ -639,6 +736,25 @@ const xunit = D("ALPHABETICA", () => {
         A(E(Q(X("parent")), 2));
         A(E(Q(X("color")), 1));
         A(E(Q(X("nonexistent")), 0));
+      });
+    });
+    E("bare _ in goal() matches anything without binding", () => {
+      withKB([], () => {
+        F("color", "red", "warm");
+        F("color", "blue", "cool");
+        F("color", "green", "mixed");
+        // goal with bare _ should match any ground term in that slot.
+        const all = S([goal("color", _, _)]);
+        A(E(Q(all), 3));
+        // Mix of _ and LVar: only LVars appear in substitution, _ is ignored.
+        const names = S([goal("color", _("n"), _)]);
+        A(E(Q(names), 3));
+        A(
+          E(
+            names.every((r) => "n" in r && !("_" in r)),
+            true,
+          ),
+        );
       });
     });
     E("S solves conjoined goals (grandparent rule)", () => {

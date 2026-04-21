@@ -79,7 +79,13 @@ type Merge<A, B> = A & B extends infer I
       [K in keyof I]: I[K];
     }
   : never;
-/** Narrow the scrutinee type `S` by the pattern `P`. Drives handler value type. */
+/** Narrow the scrutinee type `S` by the pattern `P`. Drives handler value type.
+ *
+ * Distributes over union members of S so `Narrow<{kind: "ok"}, Ok | Err>` gives
+ * `Ok` (not `Ok | Err`). For each variant, we check structural compatibility
+ * with P; incompatible variants are excluded. If no variant matches, returns
+ * `never` (signaling to the caller that the pattern is unreachable).
+ */
 export type Narrow<P, S> = P extends LVar
   ? S
   : P extends RestLVar
@@ -95,29 +101,134 @@ export type Narrow<P, S> = P extends LVar
           : P extends readonly unknown[]
             ? NarrowArray<P, S>
             : [P] extends [object]
-              ? [S] extends [object]
-                ? NarrowObject<P, S>
+              ? DistributeNarrow<P, S> extends infer R
+                ? [R] extends [never]
+                  ? S
+                  : R
                 : S
               : P extends S
                 ? P
                 : S;
+/** Distributes over each variant of S; keeps ones structurally compatible with P. */
+type DistributeNarrow<P, S> = S extends any
+  ? Compatible<P, S> extends true
+    ? NarrowOne<P, S>
+    : never
+  : never;
+/** Is pattern P compatible with scrutinee-variant S? Checks only keys that P specifies. */
+type Compatible<P, S> = [P] extends [object]
+  ? [S] extends [object]
+    ? {
+        [K in keyof P & keyof S]: P[K] extends LVar
+          ? true
+          : P[K] extends RestLVar
+            ? true
+            : P[K] extends {
+                  readonly [WILDCARD]: true;
+                }
+              ? true
+              : P[K] extends (...args: any) => any
+                ? true
+                : IsCompatibleValue<P[K], S[K]>;
+      }[keyof P & keyof S] extends true
+      ? HasAllRequired<P, S>
+      : false
+    : false
+  : true;
+/** Does S have keys for every key P expects (non-capture, non-wildcard)? */
+type HasAllRequired<P, S> = keyof P extends keyof S ? true : false;
+/** Is a single pattern value compatible with a single scrutinee value? */
+type IsCompatibleValue<PV, SV> = [PV] extends [SV]
+  ? true
+  : [SV] extends [PV]
+    ? true
+    : [PV] extends [object]
+      ? [SV] extends [object]
+        ? Compatible<PV, SV>
+        : false
+      : false;
+/** For one matching variant, recursively narrow the inside too. */
+type NarrowOne<P, S> = [P] extends [object]
+  ? [S] extends [object]
+    ? S extends readonly unknown[]
+      ? S
+      : {
+          [K in keyof S]: K extends keyof P ? Narrow<P[K], S[K]> : S[K];
+        }
+    : S
+  : S;
 type NarrowArray<P extends readonly unknown[], S> =
-  HasRest<P> extends true
+  DistributeNarrowArray<P, S> extends infer R
+    ? [R] extends [never]
+      ? S
+      : R
+    : S;
+type DistributeNarrowArray<
+  P extends readonly unknown[],
+  S,
+> = S extends readonly unknown[]
+  ? ArrayCompatible<P, S> extends true
     ? S
-    : S extends readonly unknown[]
-      ? S["length"] extends P["length"]
-        ? S
-        : Extract<
-              S,
-              {
-                readonly length: P["length"];
-              }
-            > extends infer R
-          ? [R] extends [never]
-            ? S
-            : R
-          : S
-      : S;
+    : never
+  : never;
+type ArrayCompatible<
+  P extends readonly unknown[],
+  S extends readonly unknown[],
+> =
+  HasRest<P> extends true
+    ? ArrayCompatibleRest<P, S>
+    : S["length"] extends P["length"]
+      ? ElementsCompatible<P, S>
+      : false;
+type ElementsCompatible<
+  P extends readonly unknown[],
+  S extends readonly unknown[],
+> = P extends readonly [infer PH, ...infer PT]
+  ? S extends readonly [infer SH, ...infer ST]
+    ? IsElementCompatible<PH, SH> extends true
+      ? PT extends readonly unknown[]
+        ? ST extends readonly unknown[]
+          ? ElementsCompatible<PT, ST>
+          : true
+        : true
+      : false
+    : true
+  : true;
+type ArrayCompatibleRest<
+  P extends readonly unknown[],
+  S extends readonly unknown[],
+> = P extends readonly [infer PH, ...infer PT]
+  ? PH extends RestLVar<string>
+    ? true
+    : S extends readonly [infer SH, ...infer ST]
+      ? IsElementCompatible<PH, SH> extends true
+        ? PT extends readonly unknown[]
+          ? ST extends readonly unknown[]
+            ? ArrayCompatibleRest<PT, ST>
+            : true
+          : true
+        : false
+      : false
+  : true;
+type IsElementCompatible<PV, SV> = PV extends LVar
+  ? true
+  : PV extends RestLVar
+    ? true
+    : PV extends {
+          readonly [WILDCARD]: true;
+        }
+      ? true
+      : PV extends (...args: any) => any
+        ? true
+        : [PV] extends [SV]
+          ? true
+          : [SV] extends [PV]
+            ? true
+            : [PV] extends [object]
+              ? [SV] extends [object]
+                ? Compatible<PV, SV>
+                : false
+              : false;
 type HasRest<P extends readonly unknown[]> = P extends readonly [
   infer H,
   ...infer R,
@@ -126,15 +237,6 @@ type HasRest<P extends readonly unknown[]> = P extends readonly [
     ? true
     : HasRest<R>
   : false;
-type NarrowObject<P, S> =
-  Extract<S, NarrowShape<P & object, S & object>> extends infer R
-    ? [R] extends [never]
-      ? S
-      : R
-    : never;
-type NarrowShape<P extends object, S extends object> = {
-  [K in keyof P]: K extends keyof S ? Narrow<P[K], S[K]> : unknown;
-};
 type UnionToIntersection<U> = (U extends any ? (k: U) => void : never) extends (
   k: infer I,
 ) => void
@@ -215,24 +317,38 @@ export declare function A<Args extends readonly any[], R>(
   fn: (...args: Args) => R,
   ...args: Args
 ): R;
-type Arm<P, S, R> = readonly [
-  P,
-  (captures: ExtractCaptures<P, S>, value: Narrow<P, S>) => R,
-];
 export declare function B<S, const P1, R1>(
   scrutinee: S,
-  a1: Arm<P1, S, R1>,
+  a1: readonly [
+    P1,
+    (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1,
+  ],
 ): R1;
 export declare function B<S, const P1, R1, const P2, R2>(
   scrutinee: S,
-  a1: Arm<P1, S, R1>,
-  a2: Arm<P2, S, R2>,
+  a1: readonly [
+    P1,
+    (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1,
+  ],
+  a2: readonly [
+    P2,
+    (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2,
+  ],
 ): R1 | R2;
 export declare function B<S, const P1, R1, const P2, R2, const P3, R3>(
   scrutinee: S,
-  a1: Arm<P1, S, R1>,
-  a2: Arm<P2, S, R2>,
-  a3: Arm<P3, S, R3>,
+  a1: readonly [
+    P1,
+    (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1,
+  ],
+  a2: readonly [
+    P2,
+    (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2,
+  ],
+  a3: readonly [
+    P3,
+    (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3,
+  ],
 ): R1 | R2 | R3;
 export declare function B<
   S,
@@ -246,10 +362,22 @@ export declare function B<
   R4,
 >(
   scrutinee: S,
-  a1: Arm<P1, S, R1>,
-  a2: Arm<P2, S, R2>,
-  a3: Arm<P3, S, R3>,
-  a4: Arm<P4, S, R4>,
+  a1: readonly [
+    P1,
+    (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1,
+  ],
+  a2: readonly [
+    P2,
+    (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2,
+  ],
+  a3: readonly [
+    P3,
+    (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3,
+  ],
+  a4: readonly [
+    P4,
+    (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4,
+  ],
 ): R1 | R2 | R3 | R4;
 export declare function B<
   S,
@@ -265,11 +393,26 @@ export declare function B<
   R5,
 >(
   scrutinee: S,
-  a1: Arm<P1, S, R1>,
-  a2: Arm<P2, S, R2>,
-  a3: Arm<P3, S, R3>,
-  a4: Arm<P4, S, R4>,
-  a5: Arm<P5, S, R5>,
+  a1: readonly [
+    P1,
+    (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1,
+  ],
+  a2: readonly [
+    P2,
+    (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2,
+  ],
+  a3: readonly [
+    P3,
+    (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3,
+  ],
+  a4: readonly [
+    P4,
+    (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4,
+  ],
+  a5: readonly [
+    P5,
+    (captures: ExtractCaptures<P5, S>, value: Narrow<P5, S>) => R5,
+  ],
 ): R1 | R2 | R3 | R4 | R5;
 export declare function B<
   S,
@@ -287,12 +430,30 @@ export declare function B<
   R6,
 >(
   scrutinee: S,
-  a1: Arm<P1, S, R1>,
-  a2: Arm<P2, S, R2>,
-  a3: Arm<P3, S, R3>,
-  a4: Arm<P4, S, R4>,
-  a5: Arm<P5, S, R5>,
-  a6: Arm<P6, S, R6>,
+  a1: readonly [
+    P1,
+    (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1,
+  ],
+  a2: readonly [
+    P2,
+    (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2,
+  ],
+  a3: readonly [
+    P3,
+    (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3,
+  ],
+  a4: readonly [
+    P4,
+    (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4,
+  ],
+  a5: readonly [
+    P5,
+    (captures: ExtractCaptures<P5, S>, value: Narrow<P5, S>) => R5,
+  ],
+  a6: readonly [
+    P6,
+    (captures: ExtractCaptures<P6, S>, value: Narrow<P6, S>) => R6,
+  ],
 ): R1 | R2 | R3 | R4 | R5 | R6;
 export declare function B<
   S,
@@ -312,13 +473,34 @@ export declare function B<
   R7,
 >(
   scrutinee: S,
-  a1: Arm<P1, S, R1>,
-  a2: Arm<P2, S, R2>,
-  a3: Arm<P3, S, R3>,
-  a4: Arm<P4, S, R4>,
-  a5: Arm<P5, S, R5>,
-  a6: Arm<P6, S, R6>,
-  a7: Arm<P7, S, R7>,
+  a1: readonly [
+    P1,
+    (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1,
+  ],
+  a2: readonly [
+    P2,
+    (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2,
+  ],
+  a3: readonly [
+    P3,
+    (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3,
+  ],
+  a4: readonly [
+    P4,
+    (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4,
+  ],
+  a5: readonly [
+    P5,
+    (captures: ExtractCaptures<P5, S>, value: Narrow<P5, S>) => R5,
+  ],
+  a6: readonly [
+    P6,
+    (captures: ExtractCaptures<P6, S>, value: Narrow<P6, S>) => R6,
+  ],
+  a7: readonly [
+    P7,
+    (captures: ExtractCaptures<P7, S>, value: Narrow<P7, S>) => R7,
+  ],
 ): R1 | R2 | R3 | R4 | R5 | R6 | R7;
 export declare function B<
   S,
@@ -340,14 +522,38 @@ export declare function B<
   R8,
 >(
   scrutinee: S,
-  a1: Arm<P1, S, R1>,
-  a2: Arm<P2, S, R2>,
-  a3: Arm<P3, S, R3>,
-  a4: Arm<P4, S, R4>,
-  a5: Arm<P5, S, R5>,
-  a6: Arm<P6, S, R6>,
-  a7: Arm<P7, S, R7>,
-  a8: Arm<P8, S, R8>,
+  a1: readonly [
+    P1,
+    (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1,
+  ],
+  a2: readonly [
+    P2,
+    (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2,
+  ],
+  a3: readonly [
+    P3,
+    (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3,
+  ],
+  a4: readonly [
+    P4,
+    (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4,
+  ],
+  a5: readonly [
+    P5,
+    (captures: ExtractCaptures<P5, S>, value: Narrow<P5, S>) => R5,
+  ],
+  a6: readonly [
+    P6,
+    (captures: ExtractCaptures<P6, S>, value: Narrow<P6, S>) => R6,
+  ],
+  a7: readonly [
+    P7,
+    (captures: ExtractCaptures<P7, S>, value: Narrow<P7, S>) => R7,
+  ],
+  a8: readonly [
+    P8,
+    (captures: ExtractCaptures<P8, S>, value: Narrow<P8, S>) => R8,
+  ],
 ): R1 | R2 | R3 | R4 | R5 | R6 | R7 | R8;
 export declare function B<S, R>(
   scrutinee: S,
@@ -381,12 +587,21 @@ type ExhaustiveReturn<
 export declare namespace B {
   function exhaustive<S, const P1, R1>(
     scrutinee: S,
-    a1: Arm<P1, S, R1>,
+    a1: readonly [
+      P1,
+      (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1,
+    ],
   ): ExhaustiveReturn<S, readonly [readonly [P1, any]], R1>;
   function exhaustive<S, const P1, R1, const P2, R2>(
     scrutinee: S,
-    a1: Arm<P1, S, R1>,
-    a2: Arm<P2, S, R2>,
+    a1: readonly [
+      P1,
+      (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1,
+    ],
+    a2: readonly [
+      P2,
+      (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2,
+    ],
   ): ExhaustiveReturn<
     S,
     readonly [readonly [P1, any], readonly [P2, any]],
@@ -394,9 +609,18 @@ export declare namespace B {
   >;
   function exhaustive<S, const P1, R1, const P2, R2, const P3, R3>(
     scrutinee: S,
-    a1: Arm<P1, S, R1>,
-    a2: Arm<P2, S, R2>,
-    a3: Arm<P3, S, R3>,
+    a1: readonly [
+      P1,
+      (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1,
+    ],
+    a2: readonly [
+      P2,
+      (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2,
+    ],
+    a3: readonly [
+      P3,
+      (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3,
+    ],
   ): ExhaustiveReturn<
     S,
     readonly [readonly [P1, any], readonly [P2, any], readonly [P3, any]],
@@ -414,10 +638,22 @@ export declare namespace B {
     R4,
   >(
     scrutinee: S,
-    a1: Arm<P1, S, R1>,
-    a2: Arm<P2, S, R2>,
-    a3: Arm<P3, S, R3>,
-    a4: Arm<P4, S, R4>,
+    a1: readonly [
+      P1,
+      (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1,
+    ],
+    a2: readonly [
+      P2,
+      (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2,
+    ],
+    a3: readonly [
+      P3,
+      (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3,
+    ],
+    a4: readonly [
+      P4,
+      (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4,
+    ],
   ): ExhaustiveReturn<
     S,
     readonly [
@@ -442,11 +678,26 @@ export declare namespace B {
     R5,
   >(
     scrutinee: S,
-    a1: Arm<P1, S, R1>,
-    a2: Arm<P2, S, R2>,
-    a3: Arm<P3, S, R3>,
-    a4: Arm<P4, S, R4>,
-    a5: Arm<P5, S, R5>,
+    a1: readonly [
+      P1,
+      (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1,
+    ],
+    a2: readonly [
+      P2,
+      (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2,
+    ],
+    a3: readonly [
+      P3,
+      (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3,
+    ],
+    a4: readonly [
+      P4,
+      (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4,
+    ],
+    a5: readonly [
+      P5,
+      (captures: ExtractCaptures<P5, S>, value: Narrow<P5, S>) => R5,
+    ],
   ): ExhaustiveReturn<
     S,
     readonly [
@@ -474,12 +725,30 @@ export declare namespace B {
     R6,
   >(
     scrutinee: S,
-    a1: Arm<P1, S, R1>,
-    a2: Arm<P2, S, R2>,
-    a3: Arm<P3, S, R3>,
-    a4: Arm<P4, S, R4>,
-    a5: Arm<P5, S, R5>,
-    a6: Arm<P6, S, R6>,
+    a1: readonly [
+      P1,
+      (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1,
+    ],
+    a2: readonly [
+      P2,
+      (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2,
+    ],
+    a3: readonly [
+      P3,
+      (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3,
+    ],
+    a4: readonly [
+      P4,
+      (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4,
+    ],
+    a5: readonly [
+      P5,
+      (captures: ExtractCaptures<P5, S>, value: Narrow<P5, S>) => R5,
+    ],
+    a6: readonly [
+      P6,
+      (captures: ExtractCaptures<P6, S>, value: Narrow<P6, S>) => R6,
+    ],
   ): ExhaustiveReturn<
     S,
     readonly [
@@ -510,13 +779,34 @@ export declare namespace B {
     R7,
   >(
     scrutinee: S,
-    a1: Arm<P1, S, R1>,
-    a2: Arm<P2, S, R2>,
-    a3: Arm<P3, S, R3>,
-    a4: Arm<P4, S, R4>,
-    a5: Arm<P5, S, R5>,
-    a6: Arm<P6, S, R6>,
-    a7: Arm<P7, S, R7>,
+    a1: readonly [
+      P1,
+      (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1,
+    ],
+    a2: readonly [
+      P2,
+      (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2,
+    ],
+    a3: readonly [
+      P3,
+      (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3,
+    ],
+    a4: readonly [
+      P4,
+      (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4,
+    ],
+    a5: readonly [
+      P5,
+      (captures: ExtractCaptures<P5, S>, value: Narrow<P5, S>) => R5,
+    ],
+    a6: readonly [
+      P6,
+      (captures: ExtractCaptures<P6, S>, value: Narrow<P6, S>) => R6,
+    ],
+    a7: readonly [
+      P7,
+      (captures: ExtractCaptures<P7, S>, value: Narrow<P7, S>) => R7,
+    ],
   ): ExhaustiveReturn<
     S,
     readonly [
@@ -550,14 +840,38 @@ export declare namespace B {
     R8,
   >(
     scrutinee: S,
-    a1: Arm<P1, S, R1>,
-    a2: Arm<P2, S, R2>,
-    a3: Arm<P3, S, R3>,
-    a4: Arm<P4, S, R4>,
-    a5: Arm<P5, S, R5>,
-    a6: Arm<P6, S, R6>,
-    a7: Arm<P7, S, R7>,
-    a8: Arm<P8, S, R8>,
+    a1: readonly [
+      P1,
+      (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1,
+    ],
+    a2: readonly [
+      P2,
+      (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2,
+    ],
+    a3: readonly [
+      P3,
+      (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3,
+    ],
+    a4: readonly [
+      P4,
+      (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4,
+    ],
+    a5: readonly [
+      P5,
+      (captures: ExtractCaptures<P5, S>, value: Narrow<P5, S>) => R5,
+    ],
+    a6: readonly [
+      P6,
+      (captures: ExtractCaptures<P6, S>, value: Narrow<P6, S>) => R6,
+    ],
+    a7: readonly [
+      P7,
+      (captures: ExtractCaptures<P7, S>, value: Narrow<P7, S>) => R7,
+    ],
+    a8: readonly [
+      P8,
+      (captures: ExtractCaptures<P8, S>, value: Narrow<P8, S>) => R8,
+    ],
   ): ExhaustiveReturn<
     S,
     readonly [

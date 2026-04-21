@@ -148,6 +148,17 @@ const xunit = D("ALPHABETICA (JS)", () => {
       A(E(p.sum(), 7));
       A(E(Point.name, "Point"));
     });
+    E("C supports extends", () => {
+      class Animal { speak() { return "..."; } }
+      const Dog = C("Dog", {
+        extends: Animal,
+        methods: { speak() { return "woof"; } },
+      });
+      const d = new Dog();
+      A(E(d instanceof Animal, true));
+      A(E(d.speak(), "woof"));
+      A(E(Dog.name, "Dog"));
+    });
   });
 
   D("D  Do / Describe / Document", () => {
@@ -409,6 +420,16 @@ const xunit = D("ALPHABETICA (JS)", () => {
         A(E(Q(X("parent")), 2));
         A(E(Q(X("color")), 1));
         A(E(Q(X("none")), 0));
+      });
+    });
+    E("bare _ in goal() matches anything without binding", () => {
+      withKB([], () => {
+        F("color", "red");
+        F("color", "blue");
+        F("color", "green");
+        A(E(Q(S([goal("color", _)])), 3));
+        const named = S([goal("color", _("c"))]);
+        A(E(Q(named), 3));
       });
     });
     E("S solves conjoined goals", () => {

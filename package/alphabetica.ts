@@ -21,10 +21,10 @@ import { AsyncLocalStorage } from "node:async_hooks";
 type AnyFn = (...args: any[]) => any;
 
 export const MODULE_NAME: unique symbol = Symbol("ALPHABETICA.moduleName");
-export const MODULE_DOC: unique symbol = Symbol("ALPHABETICA.moduleDoc");
-export const DOC: unique symbol = Symbol("ALPHABETICA.doc");
-export const WILDCARD: unique symbol = Symbol("ALPHABETICA.wildcard");
-export const BOUNCE: unique symbol = Symbol("ALPHABETICA.bounce");
+export const MODULE_DOC:  unique symbol = Symbol("ALPHABETICA.moduleDoc");
+export const DOC:         unique symbol = Symbol("ALPHABETICA.doc");
+export const WILDCARD:    unique symbol = Symbol("ALPHABETICA.wildcard");
+export const BOUNCE:      unique symbol = Symbol("ALPHABETICA.bounce");
 
 /** Logic variable; carries its name in the type for inference. */
 export interface LVar<N extends string = string> {
@@ -60,50 +60,48 @@ export type ExtractCaptures<P, S> = ExtractCapturesImpl<P, Narrow<P, S>>;
 type ExtractCapturesImpl<P, S> =
   P extends LVar<infer N>
     ? Record<N, S>
-    : P extends RestLVar<infer N>
-      ? Record<N, S extends readonly (infer El)[] ? El[] : unknown[]>
-      : P extends readonly unknown[]
-        ? ExtractArrayCaptures<P, S>
-        : P extends object
-          ? [S] extends [object]
-            ? UnionToIntersection<
-                {
-                  [K in keyof P]: K extends keyof S
-                    ? ExtractCapturesImpl<P[K], S[K]>
-                    : {};
-                }[keyof P]
-              > extends infer I
-              ? { [K in keyof I]: I[K] }
-              : never
-            : {}
-          : {};
+  : P extends RestLVar<infer N>
+    ? Record<N, S extends readonly (infer El)[] ? El[] : unknown[]>
+  : P extends readonly unknown[]
+    ? ExtractArrayCaptures<P, S>
+  : P extends object
+    ? [S] extends [object]
+      ? UnionToIntersection<
+          {
+            [K in keyof P]: K extends keyof S
+              ? ExtractCapturesImpl<P[K], S[K]>
+              : {};
+          }[keyof P]
+        > extends infer I
+          ? { [K in keyof I]: I[K] }
+          : never
+      : {}
+  : {};
 
 // For array/tuple patterns: walk the pattern tuple, pulling captures out of
 // each element. RestLVar grabs the middle and recursion continues on PRest.
-type ExtractArrayCaptures<
-  P extends readonly unknown[],
-  S,
-> = P extends readonly [infer PHead, ...infer PRest]
-  ? PHead extends RestLVar<infer N>
-    ? Merge<
-        Record<N, S extends readonly (infer El)[] ? El[] : unknown[]>,
-        ExtractArrayCaptures<PRest, S>
-      >
-    : S extends readonly [infer SHead, ...infer SRest]
+type ExtractArrayCaptures<P extends readonly unknown[], S> =
+  P extends readonly [infer PHead, ...infer PRest]
+    ? PHead extends RestLVar<infer N>
       ? Merge<
-          ExtractCapturesImpl<PHead, SHead>,
-          ExtractArrayCaptures<PRest, SRest>
+          Record<N, S extends readonly (infer El)[] ? El[] : unknown[]>,
+          ExtractArrayCaptures<PRest, S>
         >
-      : // S isn't a labeled tuple — fall back to element type
-        S extends readonly (infer El)[]
+      : S extends readonly [infer SHead, ...infer SRest]
         ? Merge<
-            ExtractCapturesImpl<PHead, El>,
-            ExtractArrayCaptures<PRest, readonly El[]>
+            ExtractCapturesImpl<PHead, SHead>,
+            ExtractArrayCaptures<PRest, SRest>
           >
-        : {}
-  : {};
+        // S isn't a labeled tuple — fall back to element type
+        : S extends readonly (infer El)[]
+          ? Merge<ExtractCapturesImpl<PHead, El>, ExtractArrayCaptures<PRest, readonly El[]>>
+          : {}
+    : {};
 
-type Merge<A, B> = A & B extends infer I ? { [K in keyof I]: I[K] } : never;
+type Merge<A, B> =
+  (A & B) extends infer I
+    ? { [K in keyof I]: I[K] }
+    : never;
 
 /** Narrow the scrutinee type `S` by the pattern `P`. Drives handler value type.
  *
@@ -112,178 +110,161 @@ type Merge<A, B> = A & B extends infer I ? { [K in keyof I]: I[K] } : never;
  * with P; incompatible variants are excluded. If no variant matches, returns
  * `never` (signaling to the caller that the pattern is unreachable).
  */
-export type Narrow<P, S> = P extends LVar
-  ? S
+export type Narrow<P, S> =
+  P extends LVar
+    ? S
   : P extends RestLVar
     ? S
-    : P extends { readonly [WILDCARD]: true }
-      ? S
-      : P extends (v: any) => v is infer U
-        ? Extract<S, U>
-        : P extends (...args: any) => any
-          ? S
-          : P extends readonly unknown[]
-            ? NarrowArray<P, S>
-            : [P] extends [object]
-              ? DistributeNarrow<P, S> extends infer R
-                ? [R] extends [never]
-                  ? S
-                  : R
-                : S
-              : P extends S
-                ? P
-                : S;
+  : P extends { readonly [WILDCARD]: true }
+    ? S
+  : P extends (v: any) => v is infer U
+    ? Extract<S, U>
+  : P extends (...args: any) => any
+    ? S
+  : P extends readonly unknown[]
+    ? NarrowArray<P, S>
+  : [P] extends [object]
+    ? DistributeNarrow<P, S> extends infer R
+      ? [R] extends [never] ? S : R
+      : S
+  : P extends S
+    ? P
+  : S;
 
 /** Distributes over each variant of S; keeps ones structurally compatible with P. */
-type DistributeNarrow<P, S> = S extends any
-  ? Compatible<P, S> extends true
-    ? NarrowOne<P, S>
-    : never
-  : never;
+type DistributeNarrow<P, S> =
+  S extends any
+    ? Compatible<P, S> extends true ? NarrowOne<P, S> : never
+    : never;
 
 /** Is pattern P compatible with scrutinee-variant S? Checks only keys that P specifies. */
-type Compatible<P, S> = [P] extends [object]
-  ? [S] extends [object]
-    ? {
-        [K in keyof P &
-          keyof S]: // pattern key matters for compatibility; skip "don't narrow" pattern nodes
-        P[K] extends LVar
-          ? true
-          : P[K] extends RestLVar
-            ? true
-            : P[K] extends { readonly [WILDCARD]: true }
-              ? true
-              : P[K] extends (...args: any) => any
-                ? true // predicates pass structurally
-                : IsCompatibleValue<P[K], S[K]>;
-      }[keyof P & keyof S] extends true
-      ? HasAllRequired<P, S>
+type Compatible<P, S> =
+  [P] extends [object]
+    ? [S] extends [object]
+      ? {
+          [K in keyof P & keyof S]:
+            // pattern key matters for compatibility; skip "don't narrow" pattern nodes
+            P[K] extends LVar              ? true
+          : P[K] extends RestLVar          ? true
+          : P[K] extends { readonly [WILDCARD]: true } ? true
+          : P[K] extends (...args: any) => any ? true  // predicates pass structurally
+          : IsCompatibleValue<P[K], S[K]>
+        }[keyof P & keyof S] extends true
+          ? HasAllRequired<P, S>
+          : false
       : false
-    : false
-  : true;
+    : true;
 
 /** Does S have keys for every key P expects (non-capture, non-wildcard)? */
-type HasAllRequired<P, S> = keyof P extends keyof S ? true : false;
+type HasAllRequired<P, S> =
+  keyof P extends keyof S
+    ? true
+    : false;
 
 /** Is a single pattern value compatible with a single scrutinee value? */
-type IsCompatibleValue<PV, SV> = [PV] extends [SV]
-  ? true
+type IsCompatibleValue<PV, SV> =
+  [PV] extends [SV]
+    ? true
   : [SV] extends [PV]
     ? true
-    : [PV] extends [object]
-      ? [SV] extends [object]
-        ? Compatible<PV, SV>
-        : false
-      : false;
+  : [PV] extends [object]
+    ? [SV] extends [object]
+      ? Compatible<PV, SV>
+      : false
+    : false;
 
 /** For one matching variant, recursively narrow the inside too. */
-type NarrowOne<P, S> = [P] extends [object]
-  ? [S] extends [object]
-    ? S extends readonly unknown[]
-      ? S
-      : {
-          [K in keyof S]: K extends keyof P ? Narrow<P[K], S[K]> : S[K];
-        }
-    : S
-  : S;
+type NarrowOne<P, S> =
+  [P] extends [object]
+    ? [S] extends [object]
+      ? S extends readonly unknown[]
+        ? S
+        : {
+            [K in keyof S]:
+              K extends keyof P
+                ? Narrow<P[K], S[K]>
+                : S[K];
+          }
+      : S
+    : S;
 
 // Narrow S to tuple variants whose length matches P (if fixed) AND whose
 // individual element types are compatible with the pattern's element
 // specifications (literals, nested structural patterns).
 type NarrowArray<P extends readonly unknown[], S> =
   DistributeNarrowArray<P, S> extends infer R
-    ? [R] extends [never]
-      ? S
-      : R
+    ? [R] extends [never] ? S : R
     : S;
 
-type DistributeNarrowArray<
-  P extends readonly unknown[],
-  S,
-> = S extends readonly unknown[]
-  ? ArrayCompatible<P, S> extends true
-    ? S
-    : never
-  : never;
+type DistributeNarrowArray<P extends readonly unknown[], S> =
+  S extends readonly unknown[]
+    ? ArrayCompatible<P, S> extends true
+      ? S
+      : never
+    : never;
 
 // Pattern/array-variant compatibility: length matches (or pattern has rest),
 // and each aligned pair is element-compatible.
-type ArrayCompatible<
-  P extends readonly unknown[],
-  S extends readonly unknown[],
-> =
+type ArrayCompatible<P extends readonly unknown[], S extends readonly unknown[]> =
   HasRest<P> extends true
     ? ArrayCompatibleRest<P, S>
     : S["length"] extends P["length"]
       ? ElementsCompatible<P, S>
       : false;
 
-type ElementsCompatible<
-  P extends readonly unknown[],
-  S extends readonly unknown[],
-> = P extends readonly [infer PH, ...infer PT]
-  ? S extends readonly [infer SH, ...infer ST]
-    ? IsElementCompatible<PH, SH> extends true
-      ? PT extends readonly unknown[]
-        ? ST extends readonly unknown[]
-          ? ElementsCompatible<PT, ST>
-          : true
-        : true
-      : false
-    : true
-  : true;
-
-// For rest patterns we only check the fixed head and tail, not the rest slot.
-type ArrayCompatibleRest<
-  P extends readonly unknown[],
-  S extends readonly unknown[],
-> = P extends readonly [infer PH, ...infer PT]
-  ? PH extends RestLVar<string>
-    ? true // rest slurps everything remaining; stop checking
-    : S extends readonly [infer SH, ...infer ST]
+type ElementsCompatible<P extends readonly unknown[], S extends readonly unknown[]> =
+  P extends readonly [infer PH, ...infer PT]
+    ? S extends readonly [infer SH, ...infer ST]
       ? IsElementCompatible<PH, SH> extends true
         ? PT extends readonly unknown[]
           ? ST extends readonly unknown[]
-            ? ArrayCompatibleRest<PT, ST>
+            ? ElementsCompatible<PT, ST>
             : true
           : true
         : false
-      : false
-  : true;
+      : true
+    : true;
+
+// For rest patterns we only check the fixed head and tail, not the rest slot.
+type ArrayCompatibleRest<P extends readonly unknown[], S extends readonly unknown[]> =
+  P extends readonly [infer PH, ...infer PT]
+    ? PH extends RestLVar<string>
+      ? true  // rest slurps everything remaining; stop checking
+      : S extends readonly [infer SH, ...infer ST]
+        ? IsElementCompatible<PH, SH> extends true
+          ? PT extends readonly unknown[]
+            ? ST extends readonly unknown[]
+              ? ArrayCompatibleRest<PT, ST>
+              : true
+            : true
+          : false
+        : false
+    : true;
 
 // "Does pattern-element PV admit scrutinee-element SV?"
-type IsElementCompatible<PV, SV> = PV extends LVar
-  ? true
-  : PV extends RestLVar
-    ? true
-    : PV extends { readonly [WILDCARD]: true }
+type IsElementCompatible<PV, SV> =
+  PV extends LVar                          ? true
+  : PV extends RestLVar                    ? true
+  : PV extends { readonly [WILDCARD]: true } ? true
+  : PV extends (...args: any) => any       ? true
+  : [PV] extends [SV]                      ? true
+  : [SV] extends [PV]                      ? true
+  : [PV] extends [object]
+    ? [SV] extends [object]
+      ? Compatible<PV, SV>
+      : false
+    : false;
+
+type HasRest<P extends readonly unknown[]> =
+  P extends readonly [infer H, ...infer R]
+    ? H extends RestLVar<string>
       ? true
-      : PV extends (...args: any) => any
-        ? true
-        : [PV] extends [SV]
-          ? true
-          : [SV] extends [PV]
-            ? true
-            : [PV] extends [object]
-              ? [SV] extends [object]
-                ? Compatible<PV, SV>
-                : false
-              : false;
+      : HasRest<R>
+    : false;
 
-type HasRest<P extends readonly unknown[]> = P extends readonly [
-  infer H,
-  ...infer R,
-]
-  ? H extends RestLVar<string>
-    ? true
-    : HasRest<R>
-  : false;
-
-type UnionToIntersection<U> = (U extends any ? (k: U) => void : never) extends (
-  k: infer I,
-) => void
-  ? I
-  : never;
+type UnionToIntersection<U> =
+  (U extends any ? (k: U) => void : never) extends (k: infer I) => void
+    ? I : never;
 
 /** Trampoline continuation. */
 export interface Bounce<A extends readonly any[] = readonly any[]> {
@@ -303,11 +284,8 @@ export interface WhenNode<Fix = unknown> {
   readonly label: string;
   readonly then: ThenNode<Fix>;
 }
-export type StateTuple<Fix = any> = readonly [
-  label: string,
-  fixture: Fix,
-  ...whens: WhenNode<Fix>[],
-];
+export type StateTuple<Fix = any> =
+  readonly [label: string, fixture: Fix, ...whens: WhenNode<Fix>[]];
 export interface StateNode<Fix = unknown> {
   readonly kind: "state";
   readonly label: string;
@@ -334,13 +312,11 @@ export interface DescribeNode {
 
 export type TestNode = GivenNode | DescribeNode | ExamineNode;
 
-export type Module<
-  N extends string,
-  Members extends Record<string, unknown>,
-> = Readonly<Members> & {
-  readonly [MODULE_NAME]: N;
-  readonly [MODULE_DOC]?: string;
-};
+export type Module<N extends string, Members extends Record<string, unknown>> =
+  Readonly<Members> & {
+    readonly [MODULE_NAME]: N;
+    readonly [MODULE_DOC]?: string;
+  };
 
 // -----------------------------------------------------------------------------
 // Knowledge base scoping (AsyncLocalStorage)
@@ -360,22 +336,18 @@ export function currentKB(): KnowledgeBase {
 export function withKB<R>(fn: () => R): R;
 export function withKB<R>(kb: KnowledgeBase, fn: () => R): R;
 export function withKB<R>(a: KnowledgeBase | (() => R), b?: () => R): R {
-  const [kb, fn] =
-    typeof a === "function" ? [[] as KnowledgeBase, a as () => R] : [a, b!];
+  const [kb, fn] = typeof a === "function"
+    ? [[] as KnowledgeBase, a as () => R]
+    : [a, b!];
   return kbStorage.run(kb, fn);
 }
 
 /** TS 5.2+ disposable scope. Usage: `using s = scope();`. */
-export function scope(
-  kb: KnowledgeBase = [],
-): Disposable & { kb: KnowledgeBase } {
+export function scope(kb: KnowledgeBase = []): Disposable & { kb: KnowledgeBase } {
   kbStorage.enterWith(kb);
   return {
     kb,
-    [Symbol.dispose]() {
-      kbStorage.disable();
-      kbStorage.enterWith(rootKB);
-    },
+    [Symbol.dispose]() { kbStorage.disable(); kbStorage.enterWith(rootKB); },
   };
 }
 
@@ -398,10 +370,7 @@ function _impl(name?: string): LVar | never {
   return { __lvar: true, name };
 }
 (_impl as any)[WILDCARD] = true;
-(_impl as any).rest = <N extends string>(name: N): RestLVar<N> => ({
-  __rest_lvar: true,
-  name,
-});
+(_impl as any).rest = <N extends string>(name: N): RestLVar<N> => ({ __rest_lvar: true, name });
 
 export const _: {
   <N extends string>(name: N): LVar<N>;
@@ -429,9 +398,8 @@ export function A(first: any, ...rest: any[]): any {
     const treatAsAttempt =
       first.length === 0 && (rest.length === 0 || typeof rest[0] === "string");
     if (treatAsAttempt) {
-      try {
-        return first();
-      } catch (e) {
+      try { return first(); }
+      catch (e) {
         const msg = typeof rest[0] === "string" ? rest[0] : "A: attempt failed";
         throw new Error(`${msg}: ${String(e)}`, { cause: e });
       }
@@ -462,244 +430,70 @@ type Arm<P, S, R> = readonly [
 
 export function B<S, const P1, R1>(
   scrutinee: S,
-  a1: readonly [
-    P1,
-    (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1,
-  ],
+  a1: readonly [P1, (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1],
 ): R1;
 export function B<S, const P1, R1, const P2, R2>(
   scrutinee: S,
-  a1: readonly [
-    P1,
-    (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1,
-  ],
-  a2: readonly [
-    P2,
-    (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2,
-  ],
+  a1: readonly [P1, (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1],
+  a2: readonly [P2, (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2],
 ): R1 | R2;
 export function B<S, const P1, R1, const P2, R2, const P3, R3>(
   scrutinee: S,
-  a1: readonly [
-    P1,
-    (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1,
-  ],
-  a2: readonly [
-    P2,
-    (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2,
-  ],
-  a3: readonly [
-    P3,
-    (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3,
-  ],
+  a1: readonly [P1, (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1],
+  a2: readonly [P2, (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2],
+  a3: readonly [P3, (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3],
 ): R1 | R2 | R3;
 export function B<S, const P1, R1, const P2, R2, const P3, R3, const P4, R4>(
   scrutinee: S,
-  a1: readonly [
-    P1,
-    (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1,
-  ],
-  a2: readonly [
-    P2,
-    (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2,
-  ],
-  a3: readonly [
-    P3,
-    (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3,
-  ],
-  a4: readonly [
-    P4,
-    (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4,
-  ],
+  a1: readonly [P1, (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1],
+  a2: readonly [P2, (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2],
+  a3: readonly [P3, (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3],
+  a4: readonly [P4, (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4],
 ): R1 | R2 | R3 | R4;
-export function B<
-  S,
-  const P1,
-  R1,
-  const P2,
-  R2,
-  const P3,
-  R3,
-  const P4,
-  R4,
-  const P5,
-  R5,
->(
+export function B<S, const P1, R1, const P2, R2, const P3, R3, const P4, R4, const P5, R5>(
   scrutinee: S,
-  a1: readonly [
-    P1,
-    (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1,
-  ],
-  a2: readonly [
-    P2,
-    (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2,
-  ],
-  a3: readonly [
-    P3,
-    (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3,
-  ],
-  a4: readonly [
-    P4,
-    (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4,
-  ],
-  a5: readonly [
-    P5,
-    (captures: ExtractCaptures<P5, S>, value: Narrow<P5, S>) => R5,
-  ],
+  a1: readonly [P1, (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1],
+  a2: readonly [P2, (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2],
+  a3: readonly [P3, (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3],
+  a4: readonly [P4, (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4],
+  a5: readonly [P5, (captures: ExtractCaptures<P5, S>, value: Narrow<P5, S>) => R5],
 ): R1 | R2 | R3 | R4 | R5;
-export function B<
-  S,
-  const P1,
-  R1,
-  const P2,
-  R2,
-  const P3,
-  R3,
-  const P4,
-  R4,
-  const P5,
-  R5,
-  const P6,
-  R6,
->(
+export function B<S, const P1, R1, const P2, R2, const P3, R3, const P4, R4, const P5, R5, const P6, R6>(
   scrutinee: S,
-  a1: readonly [
-    P1,
-    (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1,
-  ],
-  a2: readonly [
-    P2,
-    (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2,
-  ],
-  a3: readonly [
-    P3,
-    (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3,
-  ],
-  a4: readonly [
-    P4,
-    (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4,
-  ],
-  a5: readonly [
-    P5,
-    (captures: ExtractCaptures<P5, S>, value: Narrow<P5, S>) => R5,
-  ],
-  a6: readonly [
-    P6,
-    (captures: ExtractCaptures<P6, S>, value: Narrow<P6, S>) => R6,
-  ],
+  a1: readonly [P1, (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1],
+  a2: readonly [P2, (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2],
+  a3: readonly [P3, (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3],
+  a4: readonly [P4, (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4],
+  a5: readonly [P5, (captures: ExtractCaptures<P5, S>, value: Narrow<P5, S>) => R5],
+  a6: readonly [P6, (captures: ExtractCaptures<P6, S>, value: Narrow<P6, S>) => R6],
 ): R1 | R2 | R3 | R4 | R5 | R6;
-export function B<
-  S,
-  const P1,
-  R1,
-  const P2,
-  R2,
-  const P3,
-  R3,
-  const P4,
-  R4,
-  const P5,
-  R5,
-  const P6,
-  R6,
-  const P7,
-  R7,
->(
+export function B<S, const P1, R1, const P2, R2, const P3, R3, const P4, R4, const P5, R5, const P6, R6, const P7, R7>(
   scrutinee: S,
-  a1: readonly [
-    P1,
-    (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1,
-  ],
-  a2: readonly [
-    P2,
-    (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2,
-  ],
-  a3: readonly [
-    P3,
-    (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3,
-  ],
-  a4: readonly [
-    P4,
-    (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4,
-  ],
-  a5: readonly [
-    P5,
-    (captures: ExtractCaptures<P5, S>, value: Narrow<P5, S>) => R5,
-  ],
-  a6: readonly [
-    P6,
-    (captures: ExtractCaptures<P6, S>, value: Narrow<P6, S>) => R6,
-  ],
-  a7: readonly [
-    P7,
-    (captures: ExtractCaptures<P7, S>, value: Narrow<P7, S>) => R7,
-  ],
+  a1: readonly [P1, (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1],
+  a2: readonly [P2, (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2],
+  a3: readonly [P3, (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3],
+  a4: readonly [P4, (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4],
+  a5: readonly [P5, (captures: ExtractCaptures<P5, S>, value: Narrow<P5, S>) => R5],
+  a6: readonly [P6, (captures: ExtractCaptures<P6, S>, value: Narrow<P6, S>) => R6],
+  a7: readonly [P7, (captures: ExtractCaptures<P7, S>, value: Narrow<P7, S>) => R7],
 ): R1 | R2 | R3 | R4 | R5 | R6 | R7;
-export function B<
-  S,
-  const P1,
-  R1,
-  const P2,
-  R2,
-  const P3,
-  R3,
-  const P4,
-  R4,
-  const P5,
-  R5,
-  const P6,
-  R6,
-  const P7,
-  R7,
-  const P8,
-  R8,
->(
+export function B<S, const P1, R1, const P2, R2, const P3, R3, const P4, R4, const P5, R5, const P6, R6, const P7, R7, const P8, R8>(
   scrutinee: S,
-  a1: readonly [
-    P1,
-    (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1,
-  ],
-  a2: readonly [
-    P2,
-    (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2,
-  ],
-  a3: readonly [
-    P3,
-    (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3,
-  ],
-  a4: readonly [
-    P4,
-    (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4,
-  ],
-  a5: readonly [
-    P5,
-    (captures: ExtractCaptures<P5, S>, value: Narrow<P5, S>) => R5,
-  ],
-  a6: readonly [
-    P6,
-    (captures: ExtractCaptures<P6, S>, value: Narrow<P6, S>) => R6,
-  ],
-  a7: readonly [
-    P7,
-    (captures: ExtractCaptures<P7, S>, value: Narrow<P7, S>) => R7,
-  ],
-  a8: readonly [
-    P8,
-    (captures: ExtractCaptures<P8, S>, value: Narrow<P8, S>) => R8,
-  ],
+  a1: readonly [P1, (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1],
+  a2: readonly [P2, (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2],
+  a3: readonly [P3, (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3],
+  a4: readonly [P4, (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4],
+  a5: readonly [P5, (captures: ExtractCaptures<P5, S>, value: Narrow<P5, S>) => R5],
+  a6: readonly [P6, (captures: ExtractCaptures<P6, S>, value: Narrow<P6, S>) => R6],
+  a7: readonly [P7, (captures: ExtractCaptures<P7, S>, value: Narrow<P7, S>) => R7],
+  a8: readonly [P8, (captures: ExtractCaptures<P8, S>, value: Narrow<P8, S>) => R8],
 ): R1 | R2 | R3 | R4 | R5 | R6 | R7 | R8;
 // Fallback for >8 arms: looser types
 export function B<S, R>(
   scrutinee: S,
-  ...arms: readonly (readonly [
-    unknown,
-    (captures: Record<string, unknown>, value: S) => R,
-  ])[]
+  ...arms: readonly (readonly [unknown, (captures: Record<string, unknown>, value: S) => R])[]
 ): R;
-export function B(
-  scrutinee: any,
-  ...arms: readonly (readonly [unknown, AnyFn])[]
-): any {
+export function B(scrutinee: any, ...arms: readonly (readonly [unknown, AnyFn])[]): any {
   for (const [pattern, handler] of arms) {
     const captures: Record<string, unknown> = {};
     if (matchPattern(pattern, scrutinee, captures)) {
@@ -710,28 +504,23 @@ export function B(
 }
 
 /** Remaining<S, Arms> — subtract each arm's narrowed slice from S. */
-type Remaining<
-  S,
-  Arms extends readonly (readonly [unknown, any])[],
-> = Arms extends readonly [infer H, ...infer Rest]
-  ? H extends readonly [infer P, any]
-    ? Rest extends readonly (readonly [unknown, any])[]
-      ? Remaining<Exclude<S, Narrow<P, S>>, Rest>
-      : Exclude<S, Narrow<P, S>>
-    : S
-  : S;
+type Remaining<S, Arms extends readonly (readonly [unknown, any])[]> =
+  Arms extends readonly [infer H, ...infer Rest]
+    ? H extends readonly [infer P, any]
+      ? Rest extends readonly (readonly [unknown, any])[]
+        ? Remaining<Exclude<S, Narrow<P, S>>, Rest>
+        : Exclude<S, Narrow<P, S>>
+      : S
+    : S;
 
 /** Return-type wrapper: R when exhaustive, a poisoned error type otherwise. */
-type ExhaustiveReturn<
-  S,
-  Arms extends readonly (readonly [unknown, any])[],
-  R,
-> = [Remaining<S, Arms>] extends [never]
-  ? R
-  : {
-      readonly __NON_EXHAUSTIVE__: "B.exhaustive: some scrutinee cases are not covered";
-      readonly uncoveredCases: Remaining<S, Arms>;
-    };
+type ExhaustiveReturn<S, Arms extends readonly (readonly [unknown, any])[], R> =
+  [Remaining<S, Arms>] extends [never]
+    ? R
+    : {
+        readonly __NON_EXHAUSTIVE__: "B.exhaustive: some scrutinee cases are not covered";
+        readonly uncoveredCases: Remaining<S, Arms>;
+      };
 
 export namespace B {
   // B.exhaustive: same runtime as B, but the return type becomes a poisoned
@@ -739,309 +528,65 @@ export namespace B {
   // use the return value will surface the error at the call site.
   export function exhaustive<S, const P1, R1>(
     scrutinee: S,
-    a1: readonly [
-      P1,
-      (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1,
-    ],
+    a1: readonly [P1, (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1],
   ): ExhaustiveReturn<S, readonly [readonly [P1, any]], R1>;
   export function exhaustive<S, const P1, R1, const P2, R2>(
     scrutinee: S,
-    a1: readonly [
-      P1,
-      (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1,
-    ],
-    a2: readonly [
-      P2,
-      (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2,
-    ],
-  ): ExhaustiveReturn<
-    S,
-    readonly [readonly [P1, any], readonly [P2, any]],
-    R1 | R2
-  >;
+    a1: readonly [P1, (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1],
+    a2: readonly [P2, (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2],
+  ): ExhaustiveReturn<S, readonly [readonly [P1, any], readonly [P2, any]], R1 | R2>;
   export function exhaustive<S, const P1, R1, const P2, R2, const P3, R3>(
     scrutinee: S,
-    a1: readonly [
-      P1,
-      (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1,
-    ],
-    a2: readonly [
-      P2,
-      (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2,
-    ],
-    a3: readonly [
-      P3,
-      (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3,
-    ],
-  ): ExhaustiveReturn<
-    S,
-    readonly [readonly [P1, any], readonly [P2, any], readonly [P3, any]],
-    R1 | R2 | R3
-  >;
-  export function exhaustive<
-    S,
-    const P1,
-    R1,
-    const P2,
-    R2,
-    const P3,
-    R3,
-    const P4,
-    R4,
-  >(
+    a1: readonly [P1, (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1],
+    a2: readonly [P2, (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2],
+    a3: readonly [P3, (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3],
+  ): ExhaustiveReturn<S, readonly [readonly [P1, any], readonly [P2, any], readonly [P3, any]], R1 | R2 | R3>;
+  export function exhaustive<S, const P1, R1, const P2, R2, const P3, R3, const P4, R4>(
     scrutinee: S,
-    a1: readonly [
-      P1,
-      (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1,
-    ],
-    a2: readonly [
-      P2,
-      (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2,
-    ],
-    a3: readonly [
-      P3,
-      (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3,
-    ],
-    a4: readonly [
-      P4,
-      (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4,
-    ],
-  ): ExhaustiveReturn<
-    S,
-    readonly [
-      readonly [P1, any],
-      readonly [P2, any],
-      readonly [P3, any],
-      readonly [P4, any],
-    ],
-    R1 | R2 | R3 | R4
-  >;
-  export function exhaustive<
-    S,
-    const P1,
-    R1,
-    const P2,
-    R2,
-    const P3,
-    R3,
-    const P4,
-    R4,
-    const P5,
-    R5,
-  >(
+    a1: readonly [P1, (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1],
+    a2: readonly [P2, (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2],
+    a3: readonly [P3, (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3],
+    a4: readonly [P4, (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4],
+  ): ExhaustiveReturn<S, readonly [readonly [P1, any], readonly [P2, any], readonly [P3, any], readonly [P4, any]], R1 | R2 | R3 | R4>;
+  export function exhaustive<S, const P1, R1, const P2, R2, const P3, R3, const P4, R4, const P5, R5>(
     scrutinee: S,
-    a1: readonly [
-      P1,
-      (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1,
-    ],
-    a2: readonly [
-      P2,
-      (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2,
-    ],
-    a3: readonly [
-      P3,
-      (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3,
-    ],
-    a4: readonly [
-      P4,
-      (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4,
-    ],
-    a5: readonly [
-      P5,
-      (captures: ExtractCaptures<P5, S>, value: Narrow<P5, S>) => R5,
-    ],
-  ): ExhaustiveReturn<
-    S,
-    readonly [
-      readonly [P1, any],
-      readonly [P2, any],
-      readonly [P3, any],
-      readonly [P4, any],
-      readonly [P5, any],
-    ],
-    R1 | R2 | R3 | R4 | R5
-  >;
-  export function exhaustive<
-    S,
-    const P1,
-    R1,
-    const P2,
-    R2,
-    const P3,
-    R3,
-    const P4,
-    R4,
-    const P5,
-    R5,
-    const P6,
-    R6,
-  >(
+    a1: readonly [P1, (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1],
+    a2: readonly [P2, (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2],
+    a3: readonly [P3, (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3],
+    a4: readonly [P4, (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4],
+    a5: readonly [P5, (captures: ExtractCaptures<P5, S>, value: Narrow<P5, S>) => R5],
+  ): ExhaustiveReturn<S, readonly [readonly [P1, any], readonly [P2, any], readonly [P3, any], readonly [P4, any], readonly [P5, any]], R1 | R2 | R3 | R4 | R5>;
+  export function exhaustive<S, const P1, R1, const P2, R2, const P3, R3, const P4, R4, const P5, R5, const P6, R6>(
     scrutinee: S,
-    a1: readonly [
-      P1,
-      (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1,
-    ],
-    a2: readonly [
-      P2,
-      (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2,
-    ],
-    a3: readonly [
-      P3,
-      (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3,
-    ],
-    a4: readonly [
-      P4,
-      (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4,
-    ],
-    a5: readonly [
-      P5,
-      (captures: ExtractCaptures<P5, S>, value: Narrow<P5, S>) => R5,
-    ],
-    a6: readonly [
-      P6,
-      (captures: ExtractCaptures<P6, S>, value: Narrow<P6, S>) => R6,
-    ],
-  ): ExhaustiveReturn<
-    S,
-    readonly [
-      readonly [P1, any],
-      readonly [P2, any],
-      readonly [P3, any],
-      readonly [P4, any],
-      readonly [P5, any],
-      readonly [P6, any],
-    ],
-    R1 | R2 | R3 | R4 | R5 | R6
-  >;
-  export function exhaustive<
-    S,
-    const P1,
-    R1,
-    const P2,
-    R2,
-    const P3,
-    R3,
-    const P4,
-    R4,
-    const P5,
-    R5,
-    const P6,
-    R6,
-    const P7,
-    R7,
-  >(
+    a1: readonly [P1, (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1],
+    a2: readonly [P2, (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2],
+    a3: readonly [P3, (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3],
+    a4: readonly [P4, (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4],
+    a5: readonly [P5, (captures: ExtractCaptures<P5, S>, value: Narrow<P5, S>) => R5],
+    a6: readonly [P6, (captures: ExtractCaptures<P6, S>, value: Narrow<P6, S>) => R6],
+  ): ExhaustiveReturn<S, readonly [readonly [P1, any], readonly [P2, any], readonly [P3, any], readonly [P4, any], readonly [P5, any], readonly [P6, any]], R1 | R2 | R3 | R4 | R5 | R6>;
+  export function exhaustive<S, const P1, R1, const P2, R2, const P3, R3, const P4, R4, const P5, R5, const P6, R6, const P7, R7>(
     scrutinee: S,
-    a1: readonly [
-      P1,
-      (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1,
-    ],
-    a2: readonly [
-      P2,
-      (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2,
-    ],
-    a3: readonly [
-      P3,
-      (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3,
-    ],
-    a4: readonly [
-      P4,
-      (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4,
-    ],
-    a5: readonly [
-      P5,
-      (captures: ExtractCaptures<P5, S>, value: Narrow<P5, S>) => R5,
-    ],
-    a6: readonly [
-      P6,
-      (captures: ExtractCaptures<P6, S>, value: Narrow<P6, S>) => R6,
-    ],
-    a7: readonly [
-      P7,
-      (captures: ExtractCaptures<P7, S>, value: Narrow<P7, S>) => R7,
-    ],
-  ): ExhaustiveReturn<
-    S,
-    readonly [
-      readonly [P1, any],
-      readonly [P2, any],
-      readonly [P3, any],
-      readonly [P4, any],
-      readonly [P5, any],
-      readonly [P6, any],
-      readonly [P7, any],
-    ],
-    R1 | R2 | R3 | R4 | R5 | R6 | R7
-  >;
-  export function exhaustive<
-    S,
-    const P1,
-    R1,
-    const P2,
-    R2,
-    const P3,
-    R3,
-    const P4,
-    R4,
-    const P5,
-    R5,
-    const P6,
-    R6,
-    const P7,
-    R7,
-    const P8,
-    R8,
-  >(
+    a1: readonly [P1, (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1],
+    a2: readonly [P2, (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2],
+    a3: readonly [P3, (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3],
+    a4: readonly [P4, (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4],
+    a5: readonly [P5, (captures: ExtractCaptures<P5, S>, value: Narrow<P5, S>) => R5],
+    a6: readonly [P6, (captures: ExtractCaptures<P6, S>, value: Narrow<P6, S>) => R6],
+    a7: readonly [P7, (captures: ExtractCaptures<P7, S>, value: Narrow<P7, S>) => R7],
+  ): ExhaustiveReturn<S, readonly [readonly [P1, any], readonly [P2, any], readonly [P3, any], readonly [P4, any], readonly [P5, any], readonly [P6, any], readonly [P7, any]], R1 | R2 | R3 | R4 | R5 | R6 | R7>;
+  export function exhaustive<S, const P1, R1, const P2, R2, const P3, R3, const P4, R4, const P5, R5, const P6, R6, const P7, R7, const P8, R8>(
     scrutinee: S,
-    a1: readonly [
-      P1,
-      (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1,
-    ],
-    a2: readonly [
-      P2,
-      (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2,
-    ],
-    a3: readonly [
-      P3,
-      (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3,
-    ],
-    a4: readonly [
-      P4,
-      (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4,
-    ],
-    a5: readonly [
-      P5,
-      (captures: ExtractCaptures<P5, S>, value: Narrow<P5, S>) => R5,
-    ],
-    a6: readonly [
-      P6,
-      (captures: ExtractCaptures<P6, S>, value: Narrow<P6, S>) => R6,
-    ],
-    a7: readonly [
-      P7,
-      (captures: ExtractCaptures<P7, S>, value: Narrow<P7, S>) => R7,
-    ],
-    a8: readonly [
-      P8,
-      (captures: ExtractCaptures<P8, S>, value: Narrow<P8, S>) => R8,
-    ],
-  ): ExhaustiveReturn<
-    S,
-    readonly [
-      readonly [P1, any],
-      readonly [P2, any],
-      readonly [P3, any],
-      readonly [P4, any],
-      readonly [P5, any],
-      readonly [P6, any],
-      readonly [P7, any],
-      readonly [P8, any],
-    ],
-    R1 | R2 | R3 | R4 | R5 | R6 | R7 | R8
-  >;
-  export function exhaustive(
-    scrutinee: any,
-    ...arms: readonly (readonly [unknown, AnyFn])[]
-  ): any {
+    a1: readonly [P1, (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1],
+    a2: readonly [P2, (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2],
+    a3: readonly [P3, (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3],
+    a4: readonly [P4, (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4],
+    a5: readonly [P5, (captures: ExtractCaptures<P5, S>, value: Narrow<P5, S>) => R5],
+    a6: readonly [P6, (captures: ExtractCaptures<P6, S>, value: Narrow<P6, S>) => R6],
+    a7: readonly [P7, (captures: ExtractCaptures<P7, S>, value: Narrow<P7, S>) => R7],
+    a8: readonly [P8, (captures: ExtractCaptures<P8, S>, value: Narrow<P8, S>) => R8],
+  ): ExhaustiveReturn<S, readonly [readonly [P1, any], readonly [P2, any], readonly [P3, any], readonly [P4, any], readonly [P5, any], readonly [P6, any], readonly [P7, any], readonly [P8, any]], R1 | R2 | R3 | R4 | R5 | R6 | R7 | R8>;
+  export function exhaustive(scrutinee: any, ...arms: readonly (readonly [unknown, AnyFn])[]): any {
     return B(scrutinee, ...arms);
   }
 }
@@ -1055,10 +600,7 @@ function matchPattern(
   value: unknown,
   captures: Record<string, unknown>,
 ): boolean {
-  if (
-    pattern === _ ||
-    (typeof pattern === "function" && (pattern as any)[WILDCARD])
-  ) {
+  if (pattern === _ || (typeof pattern === "function" && (pattern as any)[WILDCARD])) {
     return true;
   }
   if (pattern && typeof pattern === "object" && (pattern as LVar).__lvar) {
@@ -1071,15 +613,9 @@ function matchPattern(
     if (!Array.isArray(value)) return false;
     return matchArrayPattern(pattern, value, captures);
   }
-  if (
-    pattern &&
-    typeof pattern === "object" &&
-    value &&
-    typeof value === "object"
-  ) {
+  if (pattern && typeof pattern === "object" && value && typeof value === "object") {
     for (const key of Object.keys(pattern as object)) {
-      if (!matchPattern((pattern as any)[key], (value as any)[key], captures))
-        return false;
+      if (!matchPattern((pattern as any)[key], (value as any)[key], captures)) return false;
     }
     return true;
   }
@@ -1120,14 +656,7 @@ function matchArrayPattern(
   const rest = value.slice(headLen, value.length - tailLen);
   captures[(pattern[restIdx] as RestLVar).name] = rest;
   for (let i = 0; i < tailLen; i++) {
-    if (
-      !matchPattern(
-        pattern[restIdx + 1 + i],
-        value[value.length - tailLen + i],
-        captures,
-      )
-    )
-      return false;
+    if (!matchPattern(pattern[restIdx + 1 + i], value[value.length - tailLen + i], captures)) return false;
   }
   return true;
 }
@@ -1144,22 +673,12 @@ export interface ClassSpec<P extends object = object> {
 }
 
 export function C<N extends string, P extends object = object>(
-  name: N,
-  spec: ClassSpec<P>,
+  name: N, spec: ClassSpec<P>,
 ): new (...args: any[]) => P;
 export function C<A, B>(f: (a: A) => B): (a: A) => B;
 export function C<A, B, CC>(f: (b: B) => CC, g: (a: A) => B): (a: A) => CC;
-export function C<A, B, CC, D>(
-  f: (c: CC) => D,
-  g: (b: B) => CC,
-  h: (a: A) => B,
-): (a: A) => D;
-export function C<A, B, CC, D, E>(
-  f: (d: D) => E,
-  g: (c: CC) => D,
-  h: (b: B) => CC,
-  i: (a: A) => B,
-): (a: A) => E;
+export function C<A, B, CC, D>(f: (c: CC) => D, g: (b: B) => CC, h: (a: A) => B): (a: A) => D;
+export function C<A, B, CC, D, E>(f: (d: D) => E, g: (c: CC) => D, h: (b: B) => CC, i: (a: A) => B): (a: A) => E;
 export function C(...args: any[]): any {
   if (typeof args[0] === "string") return buildClass(args[0], args[1] ?? {});
   const fns = args as AnyFn[];
@@ -1172,20 +691,16 @@ function buildClass(name: string, spec: ClassSpec): any {
   // (no `new Function`, no runtime string compilation — CSP-safe, minifier-
   // transparent, source-map-clean). The object literal's computed key
   // `[name]` gets applied to the anonymous class's `.name` by the JS engine.
-  const Ctor: any = (
-    {
-      [name]: class extends (parent as any) {
-        constructor(...args: any[]) {
-          super();
-          if (spec.constructor) spec.constructor.apply(this, args);
-        }
-      },
-    } as any
-  )[name];
-  if (spec.methods)
-    for (const [k, v] of Object.entries(spec.methods)) Ctor.prototype[k] = v;
-  if (spec.static)
-    for (const [k, v] of Object.entries(spec.static)) Ctor[k] = v;
+  const Ctor: any = ({
+    [name]: class extends (parent as any) {
+      constructor(...args: any[]) {
+        super();
+        if (spec.constructor) spec.constructor.apply(this, args);
+      }
+    },
+  } as any)[name];
+  if (spec.methods) for (const [k, v] of Object.entries(spec.methods)) Ctor.prototype[k] = v;
+  if (spec.static)  for (const [k, v] of Object.entries(spec.static))  Ctor[k] = v;
   return Ctor;
 }
 
@@ -1201,14 +716,9 @@ export function D(first: any, second?: any): any {
   if (typeof first === "string" && typeof second === "function") {
     const children: (DescribeNode | ExamineNode)[] = [];
     describeStack.push(children);
-    try {
-      second();
-    } finally {
-      describeStack.pop();
-    }
+    try { second(); } finally { describeStack.pop(); }
     const node: DescribeNode = { kind: "describe", label: first, children };
-    if (describeStack.length > 0)
-      describeStack[describeStack.length - 1]!.push(node);
+    if (describeStack.length > 0) describeStack[describeStack.length - 1]!.push(node);
     return node;
   }
   if (typeof first === "string") {
@@ -1233,8 +743,7 @@ export function E(a: any, b?: any): any {
   if (arguments.length === 1) return (x: unknown) => Object.is(a, x);
   if (typeof a === "string" && typeof b === "function") {
     const node: ExamineNode = { kind: "examine", label: a, body: b };
-    if (describeStack.length > 0)
-      describeStack[describeStack.length - 1]!.push(node);
+    if (describeStack.length > 0) describeStack[describeStack.length - 1]!.push(node);
     return node;
   }
   return Object.is(a, b);
@@ -1244,47 +753,37 @@ type Comparable = number | bigint | string;
 
 // WidenLiteral: turn a literal type back into its base so `E.lt(5)` returns
 // `(x: number) => boolean` rather than `(x: 5) => boolean`.
-type WidenLiteral<T> = T extends number
-  ? number
-  : T extends bigint
-    ? bigint
-    : T extends string
-      ? string
-      : T;
+type WidenLiteral<T> =
+  T extends number ? number
+  : T extends bigint ? bigint
+  : T extends string ? string
+  : T;
 
 export namespace E {
   // Strictly less-than. Curries on single arg.
   export function lt<T extends Comparable>(a: T, b: T): boolean;
-  export function lt<T extends Comparable>(
-    a: T,
-  ): (b: WidenLiteral<T>) => boolean;
+  export function lt<T extends Comparable>(a: T): (b: WidenLiteral<T>) => boolean;
   export function lt(a: any, b?: any): any {
     return arguments.length === 1 ? (x: any) => x < a : a < b;
   }
 
   // Strictly greater-than.
   export function gt<T extends Comparable>(a: T, b: T): boolean;
-  export function gt<T extends Comparable>(
-    a: T,
-  ): (b: WidenLiteral<T>) => boolean;
+  export function gt<T extends Comparable>(a: T): (b: WidenLiteral<T>) => boolean;
   export function gt(a: any, b?: any): any {
     return arguments.length === 1 ? (x: any) => x > a : a > b;
   }
 
   // Less-than-or-equal.
   export function le<T extends Comparable>(a: T, b: T): boolean;
-  export function le<T extends Comparable>(
-    a: T,
-  ): (b: WidenLiteral<T>) => boolean;
+  export function le<T extends Comparable>(a: T): (b: WidenLiteral<T>) => boolean;
   export function le(a: any, b?: any): any {
     return arguments.length === 1 ? (x: any) => x <= a : a <= b;
   }
 
   // Greater-than-or-equal.
   export function ge<T extends Comparable>(a: T, b: T): boolean;
-  export function ge<T extends Comparable>(
-    a: T,
-  ): (b: WidenLiteral<T>) => boolean;
+  export function ge<T extends Comparable>(a: T): (b: WidenLiteral<T>) => boolean;
   export function ge(a: any, b?: any): any {
     return arguments.length === 1 ? (x: any) => x >= a : a >= b;
   }
@@ -1295,27 +794,11 @@ export namespace E {
 // -----------------------------------------------------------------------------
 
 export function F<T, U>(arr: readonly T[], init: U, fn: (acc: U, x: T) => U): U;
-export function F<T, U>(
-  arr: readonly T[],
-  init: U,
-  fn: (acc: U, x: T) => Promise<U>,
-): Promise<U>;
-export function F<T, U>(
-  arr: readonly T[],
-  init: U,
-  fn: (acc: U, x: T) => U | Promise<U>,
-): U | Promise<U>;
+export function F<T, U>(arr: readonly T[], init: U, fn: (acc: U, x: T) => Promise<U>): Promise<U>;
+export function F<T, U>(arr: readonly T[], init: U, fn: (acc: U, x: T) => U | Promise<U>): U | Promise<U>;
 export function F<T, U>(fn: (x: T, acc: U) => U, init: U, arr: readonly T[]): U;
-export function F<T, U>(
-  fn: (x: T, acc: U) => Promise<U>,
-  init: U,
-  arr: readonly T[],
-): Promise<U>;
-export function F<T, U>(
-  fn: (x: T, acc: U) => U | Promise<U>,
-  init: U,
-  arr: readonly T[],
-): U | Promise<U>;
+export function F<T, U>(fn: (x: T, acc: U) => Promise<U>, init: U, arr: readonly T[]): Promise<U>;
+export function F<T, U>(fn: (x: T, acc: U) => U | Promise<U>, init: U, arr: readonly T[]): U | Promise<U>;
 export function F(relation: string, ...terms: readonly unknown[]): Fact;
 export function F(first: any, second?: any, third?: any): any {
   if (typeof first === "string") {
@@ -1329,11 +812,7 @@ export function F(first: any, second?: any, third?: any): any {
   throw new TypeError("F: first arg must be array, function, or string");
 }
 
-function foldLeft(
-  arr: readonly any[],
-  init: any,
-  fn: (a: any, x: any) => any,
-): any {
+function foldLeft(arr: readonly any[], init: any, fn: (a: any, x: any) => any): any {
   let acc: any = init;
   for (let i = 0; i < arr.length; i++) {
     const r = fn(acc, arr[i]!);
@@ -1349,11 +828,7 @@ function foldLeft(
   return acc;
 }
 
-function foldRight(
-  fn: (x: any, a: any) => any,
-  init: any,
-  arr: readonly any[],
-): any {
+function foldRight(fn: (x: any, a: any) => any, init: any, arr: readonly any[]): any {
   let acc: any = init;
   for (let i = arr.length - 1; i >= 0; i--) {
     const r = fn(arr[i]!, acc);
@@ -1389,12 +864,7 @@ export function G(first: any, second?: any): any {
   const [label, ...rest] = first as readonly unknown[];
   const states: StateNode[] = rest.map((tuple) => {
     const [sLabel, fixture, ...whens] = tuple as StateTuple;
-    return {
-      kind: "state",
-      label: sLabel,
-      fixture,
-      whens: whens as WhenNode[],
-    };
+    return { kind: "state", label: sLabel, fixture, whens: whens as WhenNode[] };
   });
   return { kind: "given", label: label as string, states };
 }
@@ -1408,11 +878,9 @@ export function H<K, V>(entries: Iterable<readonly [K, V]>): Map<K, V>;
 export function H<V>(obj: Record<string, V>): Map<string, V>;
 export function H<T extends object>(obj: T, key: PropertyKey): boolean;
 export function H(first?: any, second?: any): any {
-  if (arguments.length === 2)
-    return Object.prototype.hasOwnProperty.call(first, second);
+  if (arguments.length === 2) return Object.prototype.hasOwnProperty.call(first, second);
   if (first == null) return new Map();
-  if (typeof (first as any)[Symbol.iterator] === "function")
-    return new Map(first);
+  if (typeof (first as any)[Symbol.iterator] === "function") return new Map(first);
   return new Map(Object.entries(first));
 }
 
@@ -1423,7 +891,7 @@ export function H(first?: any, second?: any): any {
 export function I<T>(x: T): T;
 export function I<T, U>(cond: unknown, thn: T, els: U): T | U;
 export function I(a: any, b?: any, c?: any): any {
-  return arguments.length === 1 ? a : a ? b : c;
+  return arguments.length === 1 ? a : (a ? b : c);
 }
 
 // -----------------------------------------------------------------------------
@@ -1431,16 +899,12 @@ export function I(a: any, b?: any, c?: any): any {
 // -----------------------------------------------------------------------------
 
 class JumpSignal {
-  constructor(
-    readonly name: string,
-    readonly value: unknown,
-  ) {}
+  constructor(readonly name: string, readonly value: unknown) {}
 }
 
 export function L<R>(name: string, body: () => R): R {
-  try {
-    return body();
-  } catch (e) {
+  try { return body(); }
+  catch (e) {
     if (e instanceof JumpSignal && e.name === name) return e.value as R;
     throw e;
   }
@@ -1454,18 +918,14 @@ export function J(name: string, value?: unknown): never {
 // K  : Constant
 // -----------------------------------------------------------------------------
 
-export function K<T>(x: T): () => T {
-  return () => x;
-}
+export function K<T>(x: T): () => T { return () => x; }
 
 // -----------------------------------------------------------------------------
 // M  : Module
 // -----------------------------------------------------------------------------
 
 export function M<N extends string, Members extends Record<string, unknown>>(
-  name: N,
-  members: Members,
-  doc?: string,
+  name: N, members: Members, doc?: string,
 ): Module<N, Members> {
   const mod = { ...members } as Module<N, Members>;
   Object.defineProperty(mod, MODULE_NAME, { value: name, enumerable: false });
@@ -1503,9 +963,7 @@ function isFact(x: unknown): x is Fact {
 
 export function N(goal: Fact): NeverGoal;
 export function N(x: boolean): boolean;
-export function N<A extends readonly any[]>(
-  pred: (...args: A) => boolean,
-): (...args: A) => boolean;
+export function N<A extends readonly any[]>(pred: (...args: A) => boolean): (...args: A) => boolean;
 export function N(x: any): any {
   if (isFact(x)) return { __never: true, goal: x } as NeverGoal;
   return typeof x === "function" ? (...a: any[]) => !x(...a) : !x;
@@ -1517,17 +975,13 @@ export function N(x: any): any {
 
 export function O<T>(arr: readonly T[]): T[];
 export function O<T>(arr: readonly T[], cmp: (a: T, b: T) => number): T[];
-export function O<T, K extends string | number | bigint>(
-  arr: readonly T[],
-  key: (t: T) => K,
-): T[];
+export function O<T, K extends string | number | bigint>(arr: readonly T[], key: (t: T) => K): T[];
 export function O<T>(arr: readonly T[], fn?: AnyFn): T[] {
   const copy = [...arr];
   if (!fn) return copy.sort();
   if (fn.length >= 2) return copy.sort(fn as any);
   return copy.sort((a, b) => {
-    const ka = fn(a),
-      kb = fn(b);
+    const ka = fn(a), kb = fn(b);
     return ka < kb ? -1 : ka > kb ? 1 : 0;
   });
 }
@@ -1538,17 +992,8 @@ export function O<T>(arr: readonly T[], fn?: AnyFn): T[] {
 
 export function P<A, B>(f: (a: A) => B): (a: A) => B;
 export function P<A, B, CC>(f: (a: A) => B, g: (b: B) => CC): (a: A) => CC;
-export function P<A, B, CC, D>(
-  f: (a: A) => B,
-  g: (b: B) => CC,
-  h: (c: CC) => D,
-): (a: A) => D;
-export function P<A, B, CC, D, E>(
-  f: (a: A) => B,
-  g: (b: B) => CC,
-  h: (c: CC) => D,
-  i: (d: D) => E,
-): (a: A) => E;
+export function P<A, B, CC, D>(f: (a: A) => B, g: (b: B) => CC, h: (c: CC) => D): (a: A) => D;
+export function P<A, B, CC, D, E>(f: (a: A) => B, g: (b: B) => CC, h: (c: CC) => D, i: (d: D) => E): (a: A) => E;
 export function P(...fns: AnyFn[]): AnyFn {
   return (x: unknown) => fns.reduce((acc, f) => f(acc), x);
 }
@@ -1574,14 +1019,9 @@ export function Q(x: any): number {
 // R  : Require | Refute | Read / Write / Append
 // -----------------------------------------------------------------------------
 
-type RWOpts =
-  | { readonly write: string | Uint8Array }
-  | { readonly append: string | Uint8Array };
+type RWOpts = { readonly write: string | Uint8Array } | { readonly append: string | Uint8Array };
 
-export function R(
-  condition: boolean,
-  message?: string,
-): asserts condition is false;
+export function R(condition: boolean, message?: string): asserts condition is false;
 export function R<T = unknown>(spec: string, base?: string): Promise<T>;
 export function R(path: string, encoding: BufferEncoding): Promise<string>;
 export function R(path: string, opts: RWOpts): Promise<void>;
@@ -1590,25 +1030,15 @@ export async function R(first: any, second?: any): Promise<any> {
     if (first) throw new Error(second ?? "R: refutation failed");
     return;
   }
-  if (typeof first !== "string")
-    throw new TypeError("R: first arg must be string or boolean");
-  if (
-    second &&
-    typeof second === "object" &&
-    ("write" in second || "append" in second)
-  ) {
+  if (typeof first !== "string") throw new TypeError("R: first arg must be string or boolean");
+  if (second && typeof second === "object" && ("write" in second || "append" in second)) {
     const { promises: fs } = await import("node:fs");
     if ("write" in second) return fs.writeFile(first, second.write as any);
     return fs.appendFile(first, second.append as any);
   }
   const looksLikeModule =
-    /\.(m|c)?[jt]sx?$/.test(first) ||
-    (!first.includes("/") && !first.includes("."));
-  if (
-    looksLikeModule &&
-    (second === undefined ||
-      (typeof second === "string" && /^(file|https?):\/\//.test(second)))
-  ) {
+    /\.(m|c)?[jt]sx?$/.test(first) || (!first.includes("/") && !first.includes("."));
+  if (looksLikeModule && (second === undefined || typeof second === "string" && /^(file|https?):\/\//.test(second))) {
     // Module import. If `second` is a base URL (e.g. import.meta.url), resolve
     // relative paths against it so R("./foo", import.meta.url) works like
     // a top-level `import "./foo"` from the caller's file.
@@ -1619,8 +1049,7 @@ export async function R(first: any, second?: any): Promise<any> {
     return import(first);
   }
   const { promises: fs } = await import("node:fs");
-  if (typeof second === "string")
-    return fs.readFile(first, second as BufferEncoding);
+  if (typeof second === "string") return fs.readFile(first, second as BufferEncoding);
   return fs.readFile(first);
 }
 
@@ -1632,11 +1061,7 @@ export function S(goals: readonly (Fact | NeverGoal)[]): Substitution[];
 export function S<T>(items?: Iterable<T>): Set<T>;
 export function S(arg?: any): any {
   if (arg === undefined) return new Set();
-  if (
-    Array.isArray(arg) &&
-    arg.length > 0 &&
-    (isFact(arg[0]) || isNeverGoal(arg[0]))
-  ) {
+  if (Array.isArray(arg) && arg.length > 0 && (isFact(arg[0]) || isNeverGoal(arg[0]))) {
     return solve(arg as readonly (Fact | NeverGoal)[]);
   }
   return new Set(arg);
@@ -1664,11 +1089,7 @@ function solve(goals: readonly (Fact | NeverGoal)[]): Substitution[] {
   return subs;
 }
 
-function solveOne(
-  g: Fact,
-  sub: Substitution,
-  kb: readonly Fact[],
-): Substitution[] {
+function solveOne(g: Fact, sub: Substitution, kb: readonly Fact[]): Substitution[] {
   const out: Substitution[] = [];
   for (const fact of kb) {
     if (fact.relation !== g.relation) continue;
@@ -1679,11 +1100,7 @@ function solveOne(
   return out;
 }
 
-function unifyTerms(
-  a: readonly unknown[],
-  b: readonly unknown[],
-  sub: Substitution,
-): Substitution | null {
+function unifyTerms(a: readonly unknown[], b: readonly unknown[], sub: Substitution): Substitution | null {
   let cur: Substitution = sub;
   for (let i = 0; i < a.length; i++) {
     const next = unifyOne(a[i], b[i], cur);
@@ -1693,13 +1110,8 @@ function unifyTerms(
   return cur;
 }
 
-function unifyOne(
-  a: unknown,
-  b: unknown,
-  sub: Substitution,
-): Substitution | null {
-  const aw = walk(a, sub),
-    bw = walk(b, sub);
+function unifyOne(a: unknown, b: unknown, sub: Substitution): Substitution | null {
+  const aw = walk(a, sub), bw = walk(b, sub);
   // Bare wildcard (typeof function && [WILDCARD]: true) matches anything,
   // without binding. Symmetric on both sides.
   if (typeof aw === "function" && (aw as any)[WILDCARD] === true) return sub;
@@ -1728,17 +1140,10 @@ export function goal(relation: string, ...terms: readonly unknown[]): Fact {
 // T  : Then (BDD) | Tap
 // -----------------------------------------------------------------------------
 
-export function T<Fix = unknown>(
-  label: string,
-  check: (fixture: Fix) => void | Promise<void>,
-): ThenNode<Fix>;
+export function T<Fix = unknown>(label: string, check: (fixture: Fix) => void | Promise<void>): ThenNode<Fix>;
 export function T<X>(fn: (x: X) => void): (x: X) => X;
 export function T(first: any, second?: any): any {
-  if (typeof first === "function")
-    return (x: unknown) => {
-      first(x);
-      return x;
-    };
+  if (typeof first === "function") return (x: unknown) => { first(x); return x; };
   return { kind: "then", label: first, check: second };
 }
 
@@ -1746,20 +1151,9 @@ export function T(first: any, second?: any): any {
 // U  : Unfold | Until — async-aware on Until
 // -----------------------------------------------------------------------------
 
-export function U<S, T>(
-  seed: S,
-  step: (s: S) => readonly [T, S] | null,
-): Iterable<T>;
-export function U(
-  cond: () => boolean,
-  body: () => void,
-  maxIter?: number,
-): void;
-export function U(
-  cond: () => Promise<boolean>,
-  body: () => void | Promise<void>,
-  maxIter?: number,
-): Promise<void>;
+export function U<S, T>(seed: S, step: (s: S) => readonly [T, S] | null): Iterable<T>;
+export function U(cond: () => boolean, body: () => void, maxIter?: number): void;
+export function U(cond: () => Promise<boolean>, body: () => void | Promise<void>, maxIter?: number): Promise<void>;
 export function U(first: any, second: any, third?: number): any {
   if (typeof first === "function") {
     let iters = 0;
@@ -1777,26 +1171,19 @@ export function U(first: any, second: any, third?: number): any {
         }
         if (c) return;
         const r = second();
-        if (isThenable(r))
-          return (async () => {
-            await r;
-            return loop();
-          })();
+        if (isThenable(r)) return (async () => { await r; return loop(); })();
       }
     };
     return loop();
   }
-  const seed = first;
-  const step = second as AnyFn;
+  const seed = first; const step = second as AnyFn;
   return {
     *[Symbol.iterator]() {
       let s = seed;
       while (true) {
         const r = step(s);
         if (r == null) return;
-        const [value, next] = r;
-        yield value;
-        s = next;
+        const [value, next] = r; yield value; s = next;
       }
     },
   };
@@ -1806,10 +1193,7 @@ export function U(first: any, second: any, third?: number): any {
 // V  : Values (let-in bindings)
 // -----------------------------------------------------------------------------
 
-export function V<B extends Record<string, unknown>, R>(
-  bindings: B,
-  body: (scope: B) => R,
-): R {
+export function V<B extends Record<string, unknown>, R>(bindings: B, body: (scope: B) => R): R {
   return body(bindings);
 }
 
@@ -1817,20 +1201,9 @@ export function V<B extends Record<string, unknown>, R>(
 // W  : When (BDD) | While — async-aware
 // -----------------------------------------------------------------------------
 
-export function W<Fix = unknown>(
-  label: string,
-  then: ThenNode<Fix>,
-): WhenNode<Fix>;
-export function W(
-  cond: () => boolean,
-  body: () => void,
-  maxIter?: number,
-): void;
-export function W(
-  cond: () => Promise<boolean>,
-  body: () => void | Promise<void>,
-  maxIter?: number,
-): Promise<void>;
+export function W<Fix = unknown>(label: string, then: ThenNode<Fix>): WhenNode<Fix>;
+export function W(cond: () => boolean, body: () => void, maxIter?: number): void;
+export function W(cond: () => Promise<boolean>, body: () => void | Promise<void>, maxIter?: number): Promise<void>;
 export function W(first: any, second: any, third?: number): any {
   if (typeof first === "function") {
     let iters = 0;
@@ -1848,11 +1221,7 @@ export function W(first: any, second: any, third?: number): any {
         }
         if (!c) return;
         const r = second();
-        if (isThenable(r))
-          return (async () => {
-            await r;
-            return loop();
-          })();
+        if (isThenable(r)) return (async () => { await r; return loop(); })();
       }
     };
     return loop();
@@ -1864,18 +1233,11 @@ export function W(first: any, second: any, third?: number): any {
 // X  : eXecute (shell via tagged template) | eXamine facts (query)
 // -----------------------------------------------------------------------------
 
-export function X(
-  strings: TemplateStringsArray,
-  ...values: unknown[]
-): Promise<string>;
+export function X(strings: TemplateStringsArray, ...values: unknown[]): Promise<string>;
 export function X(relation: string): Substitution[];
-export function X(
-  relation: string,
-  ...terms: readonly unknown[]
-): Substitution[];
+export function X(relation: string, ...terms: readonly unknown[]): Substitution[];
 export function X(first: any, ...rest: any[]): any {
-  if (Array.isArray(first) && "raw" in first)
-    return executeShell(first as TemplateStringsArray, rest, "/bin/bash");
+  if (Array.isArray(first) && "raw" in first) return executeShell(first as TemplateStringsArray, rest, "/bin/bash");
   // 1-arg form: match any fact with this relation, regardless of arity.
   // Returns one empty substitution per matching fact (count-friendly; Q() returns the number).
   if (rest.length === 0) {
@@ -1887,14 +1249,9 @@ export function X(first: any, ...rest: any[]): any {
   return solve([{ __fact: true, relation: first, terms: rest }]);
 }
 
-async function executeShell(
-  strings: TemplateStringsArray,
-  values: unknown[],
-  shell: string,
-): Promise<string> {
+async function executeShell(strings: TemplateStringsArray, values: unknown[], shell: string): Promise<string> {
   let cmd = strings[0] ?? "";
-  for (let i = 0; i < values.length; i++)
-    cmd += shellEscape(String(values[i])) + (strings[i + 1] ?? "");
+  for (let i = 0; i < values.length; i++) cmd += shellEscape(String(values[i])) + (strings[i + 1] ?? "");
   const { promisify } = await import("node:util");
   const { exec } = await import("node:child_process");
   const pExec = promisify(exec);
@@ -1902,21 +1259,13 @@ async function executeShell(
   return stdout;
 }
 
-function shellEscape(s: string): string {
-  return `'${s.replace(/'/g, `'\\''`)}'`;
-}
+function shellEscape(s: string): string { return `'${s.replace(/'/g, `'\\''`)}'`; }
 
 export namespace X {
-  export function zsh(
-    strings: TemplateStringsArray,
-    ...values: unknown[]
-  ): Promise<string> {
+  export function zsh(strings: TemplateStringsArray, ...values: unknown[]): Promise<string> {
     return executeShell(strings, values, "/bin/zsh");
   }
-  export function sh(
-    strings: TemplateStringsArray,
-    ...values: unknown[]
-  ): Promise<string> {
+  export function sh(strings: TemplateStringsArray, ...values: unknown[]): Promise<string> {
     return executeShell(strings, values, "/bin/sh");
   }
 }
@@ -1970,10 +1319,7 @@ export function Y(fn: AnyFn): AnyFn {
 }
 
 export namespace Y {
-  export function bounce<A extends readonly any[]>(
-    fn: (...args: A) => any,
-    ...args: A
-  ): Bounce<A> {
+  export function bounce<A extends readonly any[]>(fn: (...args: A) => any, ...args: A): Bounce<A> {
     return { [BOUNCE]: true, fn, args } as Bounce<A>;
   }
 }
@@ -1983,17 +1329,8 @@ export namespace Y {
 // -----------------------------------------------------------------------------
 
 export function Z<A, B>(a: readonly A[], b: readonly B[]): Array<[A, B]>;
-export function Z<A, B, C>(
-  a: readonly A[],
-  b: readonly B[],
-  c: readonly C[],
-): Array<[A, B, C]>;
-export function Z<A, B, C, D>(
-  a: readonly A[],
-  b: readonly B[],
-  c: readonly C[],
-  d: readonly D[],
-): Array<[A, B, C, D]>;
+export function Z<A, B, C>(a: readonly A[], b: readonly B[], c: readonly C[]): Array<[A, B, C]>;
+export function Z<A, B, C, D>(a: readonly A[], b: readonly B[], c: readonly C[], d: readonly D[]): Array<[A, B, C, D]>;
 export function Z(...arrs: readonly (readonly unknown[])[]): unknown[][] {
   const len = Math.min(...arrs.map((a) => a.length));
   const out: unknown[][] = [];
@@ -2056,11 +1393,7 @@ export type ReporterName = "pretty" | "tap" | "junit" | "null";
 export interface Reporter {
   readonly name: string;
   onRunStart?(ctx: ReporterCtx): void;
-  onSuiteEnter?(
-    node: TestNode,
-    path: readonly string[],
-    ctx: ReporterCtx,
-  ): void;
+  onSuiteEnter?(node: TestNode, path: readonly string[], ctx: ReporterCtx): void;
   onResult?(result: TestResult, ctx: ReporterCtx): void;
   onRunEnd?(report: TestReport, ctx: ReporterCtx): void;
 }
@@ -2088,17 +1421,12 @@ export async function run(
   reporter.onRunStart?.(rCtx);
 
   for (const t of trees) {
-    await runNode(t, [], results, {
-      kbScope,
-      filter: opts.filter,
-      reporter,
-      rCtx,
-    });
+    await runNode(t, [], results, { kbScope, filter: opts.filter, reporter, rCtx });
   }
 
-  const passed = results.filter((r) => r.status === "passed").length;
-  const failed = results.filter((r) => r.status === "failed").length;
-  const skipped = results.filter((r) => r.status === "skipped").length;
+  const passed  = results.filter(r => r.status === "passed").length;
+  const failed  = results.filter(r => r.status === "failed").length;
+  const skipped = results.filter(r => r.status === "skipped").length;
   const durationMs = performance.now() - start;
   const report: TestReport = { passed, failed, skipped, durationMs, results };
 
@@ -2140,10 +1468,9 @@ async function runNode(
     case "given": {
       const p = [...path, `Given ${node.label}`];
       ctx.reporter.onSuiteEnter?.(node, p, ctx.rCtx);
-      const wrap =
-        ctx.kbScope === "given"
-          ? <R>(fn: () => Promise<R>) => withKB([], fn)
-          : <R>(fn: () => Promise<R>) => fn();
+      const wrap = ctx.kbScope === "given"
+        ? <R>(fn: () => Promise<R>) => withKB([], fn)
+        : <R>(fn: () => Promise<R>) => fn();
       await wrap(async () => {
         for (const state of node.states) await runState(state, p, results, ctx);
       });
@@ -2160,27 +1487,17 @@ async function runState(
 ): Promise<void> {
   const p = [...path, state.label];
   // synthesize a pseudo-node for reporter onSuiteEnter
-  ctx.reporter.onSuiteEnter?.(
-    { kind: "describe", label: state.label, children: [] },
-    p,
-    ctx.rCtx,
-  );
-  const wrap =
-    ctx.kbScope === "state"
-      ? <R>(fn: () => Promise<R>) => withKB([], fn)
-      : <R>(fn: () => Promise<R>) => fn();
+  ctx.reporter.onSuiteEnter?.({ kind: "describe", label: state.label, children: [] }, p, ctx.rCtx);
+  const wrap = ctx.kbScope === "state"
+    ? <R>(fn: () => Promise<R>) => withKB([], fn)
+    : <R>(fn: () => Promise<R>) => fn();
   await wrap(async () => {
     for (const when of state.whens) {
       const wp = [...p, `When ${when.label}`];
-      ctx.reporter.onSuiteEnter?.(
-        { kind: "describe", label: `When ${when.label}`, children: [] },
-        wp,
-        ctx.rCtx,
-      );
-      const whenWrap =
-        ctx.kbScope === "when"
-          ? <R>(fn: () => Promise<R>) => withKB([], fn)
-          : <R>(fn: () => Promise<R>) => fn();
+      ctx.reporter.onSuiteEnter?.({ kind: "describe", label: `When ${when.label}`, children: [] }, wp, ctx.rCtx);
+      const whenWrap = ctx.kbScope === "when"
+        ? <R>(fn: () => Promise<R>) => withKB([], fn)
+        : <R>(fn: () => Promise<R>) => fn();
       await whenWrap(async () => {
         const tp = [...wp, `Then ${when.then.label}`];
         if (ctx.filter && !ctx.filter(tp)) {
@@ -2230,14 +1547,10 @@ async function executeCheck(
 function resolveReporter(r: ReporterName | Reporter): Reporter {
   if (typeof r !== "string") return r;
   switch (r) {
-    case "pretty":
-      return prettyReporter;
-    case "tap":
-      return tapReporter;
-    case "junit":
-      return junitReporter;
-    case "null":
-      return nullReporter;
+    case "pretty": return prettyReporter;
+    case "tap":    return tapReporter;
+    case "junit":  return junitReporter;
+    case "null":   return nullReporter;
   }
 }
 
@@ -2252,26 +1565,18 @@ export const prettyReporter: Reporter = {
   },
   onResult(result, ctx) {
     const indent = "  ".repeat(result.path.length);
-    const mark =
-      result.status === "passed"
-        ? "\u2713"
-        : result.status === "failed"
-          ? "\u2717"
-          : "\u25CB";
+    const mark = result.status === "passed" ? "\u2713"
+               : result.status === "failed" ? "\u2717"
+               : "\u25CB";
     const label = result.path[result.path.length - 1];
-    const duration =
-      result.status === "skipped"
-        ? ""
-        : `  (${result.durationMs.toFixed(1)}ms)`;
+    const duration = result.status === "skipped" ? "" : `  (${result.durationMs.toFixed(1)}ms)`;
     ctx.write(`${indent}${mark} ${label}${duration}\n`);
     if (result.status === "failed" && result.error) {
       ctx.write(`${indent}  ${result.error.message}\n`);
     }
   },
   onRunEnd(report, ctx) {
-    ctx.write(
-      `\n${report.passed} passed, ${report.failed} failed, ${report.skipped} skipped  (${report.durationMs.toFixed(1)}ms)\n`,
-    );
+    ctx.write(`\n${report.passed} passed, ${report.failed} failed, ${report.skipped} skipped  (${report.durationMs.toFixed(1)}ms)\n`);
   },
 };
 
@@ -2319,23 +1624,17 @@ export const junitReporter: Reporter = {
   onRunEnd(report, ctx) {
     const total = report.passed + report.failed + report.skipped;
     const time = (report.durationMs / 1000).toFixed(3);
-    ctx.write(
-      `<testsuite name="alphabetica" tests="${total}" failures="${report.failed}" skipped="${report.skipped}" time="${time}">\n`,
-    );
+    ctx.write(`<testsuite name="alphabetica" tests="${total}" failures="${report.failed}" skipped="${report.skipped}" time="${time}">\n`);
     for (const r of report.results) {
       const name = escXml(r.path.join(" > "));
       const t = (r.durationMs / 1000).toFixed(3);
       if (r.status === "passed") {
         ctx.write(`  <testcase name="${name}" time="${t}"/>\n`);
       } else if (r.status === "skipped") {
-        ctx.write(
-          `  <testcase name="${name}" time="${t}"><skipped/></testcase>\n`,
-        );
+        ctx.write(`  <testcase name="${name}" time="${t}"><skipped/></testcase>\n`);
       } else {
         const msg = escXml(r.error?.message ?? "failed");
-        ctx.write(
-          `  <testcase name="${name}" time="${t}"><failure message="${msg}"/></testcase>\n`,
-        );
+        ctx.write(`  <testcase name="${name}" time="${t}"><failure message="${msg}"/></testcase>\n`);
       }
     }
     ctx.write(`</testsuite>\n`);
@@ -2343,17 +1642,9 @@ export const junitReporter: Reporter = {
 };
 
 function escXml(s: string): string {
-  return s.replace(
-    /[<>&"']/g,
-    (c) =>
-      ({
-        "<": "&lt;",
-        ">": "&gt;",
-        "&": "&amp;",
-        '"': "&quot;",
-        "'": "&apos;",
-      })[c]!,
-  );
+  return s.replace(/[<>&"']/g, (c) => ({
+    "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&apos;",
+  }[c]!));
 }
 
 // =============================================================================
@@ -2361,47 +1652,10 @@ function escXml(s: string): string {
 // =============================================================================
 
 export const ALPHABETICA = {
-  _,
-  A,
-  B,
-  C,
-  D,
-  E,
-  F,
-  G,
-  H,
-  I,
-  J,
-  K,
-  L,
-  M,
-  N,
-  O,
-  P,
-  Q,
-  R,
-  S,
-  T,
-  U,
-  V,
-  W,
-  X,
-  Y,
-  Z,
-  run,
-  withKB,
-  scope,
-  currentKB,
-  goal,
-  prettyReporter,
-  tapReporter,
-  junitReporter,
-  nullReporter,
-  MODULE_NAME,
-  MODULE_DOC,
-  DOC,
-  WILDCARD,
-  BOUNCE,
+  _, A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z,
+  run, withKB, scope, currentKB, goal,
+  prettyReporter, tapReporter, junitReporter, nullReporter,
+  MODULE_NAME, MODULE_DOC, DOC, WILDCARD, BOUNCE,
 } as const;
 
 // =============================================================================
