@@ -1,6 +1,6 @@
 {
   "name": "@xs-and-10s/alphabetica",
-  "version": "0.4.0-alpha.0",
+  "version": "0.4.2-alpha.0",
   "description": "26 letters plus _, one per utility. A tiny, dependency-free combinator library for testing, DevOps scripting, code golf, and sandboxed execution.",
   "keywords": [
     "testing",
@@ -56,8 +56,7 @@
     "test:exhaustive": "tsx exhaustive.test.ts",
     "test:mjs": "node alphabetica.test.mjs",
     "clean": "rm -rf dist",
-    "prepublishOnly": "npm run clean && npm run typecheck && npm run test && npm run build && npm run check-version",
-    "check-version": "node -e \"const v=require('./package.json').version; require('child_process').execSync('npm view @xs-and-10s/alphabetica@'+v+' version 2>/dev/null').toString().trim()===v && (console.error('version '+v+' already published'),process.exit(1))\""
+    "prepublishOnly": "npm run clean && npm run typecheck && npm run test && npm run build"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

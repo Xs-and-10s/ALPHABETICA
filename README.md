@@ -118,9 +118,77 @@ Patterns narrow when they can:
 |--------------------------------|-------------------------------------------|
 | Literal (`5`, `"red"`)         | Narrows S to that literal if S is a union |
 | Discriminant object            | `Extract<S, {k: "v"}>` — standard variant |
+| Fixed-length array `[p1, p2]`  | Narrows tuple union to matching length    |
 | Type-guard `(v): v is T`       | `Extract<S, T>`                           |
 | Regular predicate              | S (no narrowing)                          |
 | Wildcard `_` / LVar `_("n")`   | S (captures but doesn't narrow)           |
+| `_.rest("n")` inside array     | Captures remaining elements as array      |
+
+### Array and tuple patterns
+
+Array patterns match exactly by length unless a rest-capture is present.
+Captures work positionally, and `_.rest("name")` can appear at any position:
+
+```ts
+import { B, _ } from "@xs-and-10s/alphabetica";
+
+// Fixed length, positional captures
+const sum = B([10, 20, 30] as const,
+  [[_("a"), _("b"), _("c")], ({ a, b, c }) => a + b + c],
+);
+// sum === 60;  a: 10, b: 20, c: 30 at the type level
+
+// Rest capture at the tail
+B([1, 2, 3, 4, 5],
+  [[_("head"), _.rest("tail")], ({ head, tail }) =>
+    `${head} then ${tail.join(",")}`],
+);
+// "1 then 2,3,4,5"
+
+// Rest in the middle
+B([1, 2, 3, 4, 5],
+  [[_("first"), _.rest("mid"), _("last")], ({ first, mid, last }) =>
+    `${first}/${mid.length}/${last}`],
+);
+// "1/3/5"
+
+// Length-discriminated tuple union narrows per arm
+type LU = readonly [string] | readonly [string, number];
+const f = (v: LU) => B(v,
+  [[_("s")],          ({ s }) => s.length],             // s: string
+  [[_("s"), _("n")],  ({ s, n }) => s.length + n],      // s: string, n: number
+);
+```
+
+### Scrutinee variable gotcha
+
+Narrowing depends on what TypeScript infers for the scrutinee at the call
+site. TypeScript narrows variables based on their initializer via control
+flow, so this initializes-then-calls pattern can surprise you:
+
+```ts
+type Msg = { kind: "ok"; data: number } | { kind: "err"; reason: string };
+
+// ✗ TS narrows `m` to {kind:"ok", data:number} immediately,
+// so arm 2's pattern has nothing to match and `v` becomes `never`.
+const m: Msg = { kind: "ok", data: 42 };
+B(m, [{ kind: "err" }, (_c, v) => v.reason /* v: never */]);
+```
+
+Prefer a function parameter or `declare const` to keep the scrutinee at
+its declared union type:
+
+```ts
+// ✓ S is Msg inside classify's body; arms narrow per pattern
+const classify = (m: Msg) => B(m,
+  [{ kind: "ok" },  (_c, v) => v.data],            // v: ok variant
+  [{ kind: "err" }, (_c, v) => v.reason.length],   // v: err variant
+);
+```
+
+This isn't specific to `B` — it's how TypeScript narrows any generic call
+over a union. If you see `v` surprise-typed as a single variant or `never`,
+check whether the scrutinee was recently initialized from a literal.
 
 ### Exhaustiveness checking
 

@@ -24,46 +24,108 @@ export type Pattern<T = unknown> =
   | {
       readonly [K in keyof T]?: Pattern<T[K]>;
     };
+/** Rest-capture marker used inside array patterns: _.rest("name"). */
+export interface RestLVar<N extends string = string> {
+  readonly __rest_lvar: true;
+  readonly name: N;
+}
 /** Extract capture bindings from a pattern matched against a scrutinee type. */
 export type ExtractCaptures<P, S> = ExtractCapturesImpl<P, Narrow<P, S>>;
 type ExtractCapturesImpl<P, S> =
   P extends LVar<infer N>
     ? Record<N, S>
-    : P extends readonly any[]
-      ? {}
-      : P extends object
-        ? [S] extends [object]
-          ? UnionToIntersection<
-              {
-                [K in keyof P]: K extends keyof S
-                  ? ExtractCapturesImpl<P[K], S[K]>
-                  : {};
-              }[keyof P]
-            > extends infer I
-            ? {
-                [K in keyof I]: I[K];
-              }
-            : never
-          : {}
-        : {};
+    : P extends RestLVar<infer N>
+      ? Record<N, S extends readonly (infer El)[] ? El[] : unknown[]>
+      : P extends readonly unknown[]
+        ? ExtractArrayCaptures<P, S>
+        : P extends object
+          ? [S] extends [object]
+            ? UnionToIntersection<
+                {
+                  [K in keyof P]: K extends keyof S
+                    ? ExtractCapturesImpl<P[K], S[K]>
+                    : {};
+                }[keyof P]
+              > extends infer I
+              ? {
+                  [K in keyof I]: I[K];
+                }
+              : never
+            : {}
+          : {};
+type ExtractArrayCaptures<
+  P extends readonly unknown[],
+  S,
+> = P extends readonly [infer PHead, ...infer PRest]
+  ? PHead extends RestLVar<infer N>
+    ? Merge<
+        Record<N, S extends readonly (infer El)[] ? El[] : unknown[]>,
+        ExtractArrayCaptures<PRest, S>
+      >
+    : S extends readonly [infer SHead, ...infer SRest]
+      ? Merge<
+          ExtractCapturesImpl<PHead, SHead>,
+          ExtractArrayCaptures<PRest, SRest>
+        >
+      : S extends readonly (infer El)[]
+        ? Merge<
+            ExtractCapturesImpl<PHead, El>,
+            ExtractArrayCaptures<PRest, readonly El[]>
+          >
+        : {}
+  : {};
+type Merge<A, B> = A & B extends infer I
+  ? {
+      [K in keyof I]: I[K];
+    }
+  : never;
 /** Narrow the scrutinee type `S` by the pattern `P`. Drives handler value type. */
 export type Narrow<P, S> = P extends LVar
   ? S
-  : P extends {
-        readonly [WILDCARD]: true;
-      }
+  : P extends RestLVar
     ? S
-    : P extends (v: any) => v is infer U
-      ? Extract<S, U>
-      : P extends (...args: any) => any
+    : P extends {
+          readonly [WILDCARD]: true;
+        }
+      ? S
+      : P extends (v: any) => v is infer U
+        ? Extract<S, U>
+        : P extends (...args: any) => any
+          ? S
+          : P extends readonly unknown[]
+            ? NarrowArray<P, S>
+            : [P] extends [object]
+              ? [S] extends [object]
+                ? NarrowObject<P, S>
+                : S
+              : P extends S
+                ? P
+                : S;
+type NarrowArray<P extends readonly unknown[], S> =
+  HasRest<P> extends true
+    ? S
+    : S extends readonly unknown[]
+      ? S["length"] extends P["length"]
         ? S
-        : [P] extends [object]
-          ? [S] extends [object]
-            ? NarrowObject<P, S>
-            : S
-          : P extends S
-            ? P
-            : S;
+        : Extract<
+              S,
+              {
+                readonly length: P["length"];
+              }
+            > extends infer R
+          ? [R] extends [never]
+            ? S
+            : R
+          : S
+      : S;
+type HasRest<P extends readonly unknown[]> = P extends readonly [
+  infer H,
+  ...infer R,
+]
+  ? H extends RestLVar<string>
+    ? true
+    : HasRest<R>
+  : false;
 type NarrowObject<P, S> =
   Extract<S, NarrowShape<P & object, S & object>> extends infer R
     ? [R] extends [never]
@@ -142,6 +204,7 @@ export declare const _: {
   <N extends string>(name: N): LVar<N>;
   (): never;
   readonly [WILDCARD]: true;
+  rest<N extends string>(name: N): RestLVar<N>;
 };
 export declare function A(
   condition: boolean,
@@ -840,6 +903,7 @@ export declare const ALPHABETICA: {
   readonly _: {
     <N extends string>(name: N): LVar<N>;
     (): never;
+    rest<N extends string>(name: N): RestLVar<N>;
     readonly [WILDCARD]: true;
   };
   readonly A: typeof A;

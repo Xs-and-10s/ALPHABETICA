@@ -74,8 +74,13 @@ function _impl(name) {
   return { __lvar: true, name };
 }
 _impl[WILDCARD] = true;
+_impl.rest = (name) => ({ __rest_lvar: true, name });
 
 export const _ = _impl;
+
+function isRestLVar(x) {
+  return !!x && typeof x === "object" && x.__rest_lvar === true;
+}
 
 // -----------------------------------------------------------------------------
 // A  : Assert | Attempt | Apply
@@ -128,6 +133,10 @@ function matchPattern(pattern, value, captures) {
     return true;
   }
   if (typeof pattern === "function") return Boolean(pattern(value));
+  if (Array.isArray(pattern)) {
+    if (!Array.isArray(value)) return false;
+    return matchArrayPattern(pattern, value, captures);
+  }
   if (pattern && typeof pattern === "object" && value && typeof value === "object") {
     for (const key of Object.keys(pattern)) {
       if (!matchPattern(pattern[key], value[key], captures)) return false;
@@ -135,6 +144,38 @@ function matchPattern(pattern, value, captures) {
     return true;
   }
   return Object.is(pattern, value);
+}
+
+function matchArrayPattern(pattern, value, captures) {
+  let restIdx = -1;
+  for (let i = 0; i < pattern.length; i++) {
+    if (isRestLVar(pattern[i])) {
+      if (restIdx !== -1) return false;
+      restIdx = i;
+    }
+  }
+
+  if (restIdx === -1) {
+    if (pattern.length !== value.length) return false;
+    for (let i = 0; i < pattern.length; i++) {
+      if (!matchPattern(pattern[i], value[i], captures)) return false;
+    }
+    return true;
+  }
+
+  const headLen = restIdx;
+  const tailLen = pattern.length - restIdx - 1;
+  if (value.length < headLen + tailLen) return false;
+
+  for (let i = 0; i < headLen; i++) {
+    if (!matchPattern(pattern[i], value[i], captures)) return false;
+  }
+  const rest = value.slice(headLen, value.length - tailLen);
+  captures[pattern[restIdx].name] = rest;
+  for (let i = 0; i < tailLen; i++) {
+    if (!matchPattern(pattern[restIdx + 1 + i], value[value.length - tailLen + i], captures)) return false;
+  }
+  return true;
 }
 
 // -----------------------------------------------------------------------------

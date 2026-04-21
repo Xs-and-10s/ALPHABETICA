@@ -3,6 +3,100 @@
 All notable changes to ALPHABETICA are documented here. This project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.2-alpha.0] — 2026-04-19
+
+### Changed — Narrow<P, S> restructure
+
+- **Distribution over union members of S.** Narrow now iterates through each
+  variant of the scrutinee and keeps the ones structurally compatible with
+  the pattern. Previously, narrowing on some union shapes was silently
+  imprecise. The new machinery is built from four helpers:
+    - `DistributeNarrow<P, S>` — fires per S variant
+    - `Compatible<P, S>` — structural fit check
+    - `IsCompatibleValue<PV, SV>` — per-value compatibility, with
+      `[SV] extends [object]` guard preventing unwanted SV-union distribution
+    - `NarrowOne<P, S>` — recursively narrows matched variant's fields so
+      nested patterns (e.g. `{tag:"A", inner:{kind:"user"}}`) narrow both
+      levels
+- **Element-level narrowing for array patterns.** `NarrowArray` now uses
+  `ArrayCompatible` / `IsElementCompatible` to check positional literal
+  compatibility, not just length. `["circle", _("r")]` against
+  `["circle", number] | ["square", number, number] | ["text", string]`
+  correctly narrows to the circle variant.
+- **Filters variants missing the discriminant key.** Pattern `{kind: "ok"}`
+  against `{kind:"ok"; data:number} | {kind:"err"; reason:string} | {type:"legacy"; v:number}`
+  narrows to the OK variant only — the legacy variant (which has no `kind`
+  key) is correctly excluded, not silently preserved.
+- **Inlined `Arm<P, S, R>`** in all 8 `B` and 8 `B.exhaustive` overloads.
+  `Arm` remains exported as a public type alias; the overloads write the
+  tuple shape directly so per-arm inference stays independent.
+
+### Fixed
+
+- **Union-distribution bug in IsCompatibleValue and IsElementCompatible.**
+  When a pattern value like `{kind:"user"}` was checked against a union
+  scrutinee value like `{kind:"user"; name:string} | {kind:"admin"; perms:string[]}`,
+  `SV extends object` distributed `SV`, yielding `true | false` = `boolean`
+  instead of a single verdict. Wrapping with `[SV] extends [object]`
+  prevents distribution and passes the union intact to `Compatible`,
+  which handles it correctly via the standard mapped-type logic.
+
+### Documentation
+
+- **New README section: "Scrutinee variable gotcha".** Explains that
+  TypeScript's control-flow narrowing on initialized variables can make
+  `Narrow` produce surprising results at the call site. Shows the idiomatic
+  pattern (function parameter or `declare const`) and the pitfall to avoid.
+  Not library-specific — affects any generic call over a union — but worth
+  documenting since it intersects directly with how users write `B` tests.
+
+### Dogfooding notes
+
+- The narrowing restructure was driven by a 6-case probe file testing real
+  edge cases: array positional narrowing, object filtering of non-
+  discriminant variants, and nested two-level narrowing. All 6 cases now
+  pass. Three new tests added to the main suite cover the same shapes
+  against real `B` calls with function-parameter scrutinees.
+- Spent a full turn debugging what appeared to be a multi-arm inference
+  bug (arm 2's handler receiving arm 1's narrowing). After extracting
+  what TS inferred for P1/P2 via a spy type, confirmed both were correct.
+  Traced the actual cause to TypeScript's control-flow narrowing on the
+  test's `const m: Msg = {kind:"ok", ...}` initializer — the variable is
+  already narrowed to the OK variant at the call site, so the Err arm
+  correctly produces `never`. Not a library bug; it's now documented.
+
+## [0.4.1-alpha.0] — 2026-04-19
+
+### Added
+
+- **Array / tuple patterns in `B`.** `[1, 2, 3]` matches exactly length-3
+  arrays. Captures work positionally: `[_("a"), _("b")]` against `[10, 20]`
+  binds `{a: 10, b: 20}`. Wildcards (`_`) and nested patterns (`{k: _("x")}`)
+  work inside array positions.
+- **`_.rest("name")`** — new rest-capture marker for array patterns. Captures
+  the remaining elements as an array. Works at any position, not just the
+  tail: `[_("first"), _.rest("mid"), _("last")]` against `[1,2,3,4,5]`
+  binds `{first: 1, mid: [2,3,4], last: 5}`.
+- **Tuple-length narrowing.** When a fixed-length pattern matches against a
+  union of tuples of different lengths, the scrutinee narrows to the
+  length-matching variant. Example: `[_("x"), _("y")]` against
+  `[string] | [string, number] | [string, number, boolean]` narrows to the
+  2-tuple variant inside the handler.
+
+### Fixed
+
+- **Array pattern length bug.** Previously, `B([1,2,3], [[1,2], () => ...])`
+  silently matched because `Object.keys([1,2])` only enumerates `["0","1"]`,
+  so the 3rd position was never compared. Length is now enforced exactly
+  unless a `RestLVar` is present in the pattern.
+
+### Dogfooding notes
+
+- The bug above was caught by an early probe in the dogfood loop. Writing
+  Case 2 of the probe (mismatched-length pattern) produced the wrong
+  answer, which is how the fix landed. Array pattern support was added
+  immediately after, exercising the same test harness.
+
 ## [0.4.0-alpha.0] — 2026-04-19
 
 ### Added

@@ -48,14 +48,22 @@ export type Pattern<T = unknown> =
   | ((value: T) => boolean)
   | { readonly [K in keyof T]?: Pattern<T[K]> };
 
+/** Rest-capture marker used inside array patterns: _.rest("name"). */
+export interface RestLVar<N extends string = string> {
+  readonly __rest_lvar: true;
+  readonly name: N;
+}
+
 /** Extract capture bindings from a pattern matched against a scrutinee type. */
 export type ExtractCaptures<P, S> = ExtractCapturesImpl<P, Narrow<P, S>>;
 
 type ExtractCapturesImpl<P, S> =
   P extends LVar<infer N>
     ? Record<N, S>
-  : P extends readonly any[]
-    ? {} // TODO(v0.3): array/tuple patterns
+  : P extends RestLVar<infer N>
+    ? Record<N, S extends readonly (infer El)[] ? El[] : unknown[]>
+  : P extends readonly unknown[]
+    ? ExtractArrayCaptures<P, S>
   : P extends object
     ? [S] extends [object]
       ? UnionToIntersection<
@@ -70,9 +78,42 @@ type ExtractCapturesImpl<P, S> =
       : {}
   : {};
 
-/** Narrow the scrutinee type `S` by the pattern `P`. Drives handler value type. */
+// For array/tuple patterns: walk the pattern tuple, pulling captures out of
+// each element. RestLVar grabs the middle and recursion continues on PRest.
+type ExtractArrayCaptures<P extends readonly unknown[], S> =
+  P extends readonly [infer PHead, ...infer PRest]
+    ? PHead extends RestLVar<infer N>
+      ? Merge<
+          Record<N, S extends readonly (infer El)[] ? El[] : unknown[]>,
+          ExtractArrayCaptures<PRest, S>
+        >
+      : S extends readonly [infer SHead, ...infer SRest]
+        ? Merge<
+            ExtractCapturesImpl<PHead, SHead>,
+            ExtractArrayCaptures<PRest, SRest>
+          >
+        // S isn't a labeled tuple — fall back to element type
+        : S extends readonly (infer El)[]
+          ? Merge<ExtractCapturesImpl<PHead, El>, ExtractArrayCaptures<PRest, readonly El[]>>
+          : {}
+    : {};
+
+type Merge<A, B> =
+  (A & B) extends infer I
+    ? { [K in keyof I]: I[K] }
+    : never;
+
+/** Narrow the scrutinee type `S` by the pattern `P`. Drives handler value type.
+ *
+ * Distributes over union members of S so `Narrow<{kind: "ok"}, Ok | Err>` gives
+ * `Ok` (not `Ok | Err`). For each variant, we check structural compatibility
+ * with P; incompatible variants are excluded. If no variant matches, returns
+ * `never` (signaling to the caller that the pattern is unreachable).
+ */
 export type Narrow<P, S> =
   P extends LVar
+    ? S
+  : P extends RestLVar
     ? S
   : P extends { readonly [WILDCARD]: true }
     ? S
@@ -80,22 +121,146 @@ export type Narrow<P, S> =
     ? Extract<S, U>
   : P extends (...args: any) => any
     ? S
+  : P extends readonly unknown[]
+    ? NarrowArray<P, S>
   : [P] extends [object]
-    ? [S] extends [object]
-      ? NarrowObject<P, S>
+    ? DistributeNarrow<P, S> extends infer R
+      ? [R] extends [never] ? S : R
       : S
   : P extends S
     ? P
   : S;
 
-type NarrowObject<P, S> =
-  Extract<S, NarrowShape<P & object, S & object>> extends infer R
-    ? [R] extends [never] ? S : R
+/** Distributes over each variant of S; keeps ones structurally compatible with P. */
+type DistributeNarrow<P, S> =
+  S extends any
+    ? Compatible<P, S> extends true ? NarrowOne<P, S> : never
     : never;
 
-type NarrowShape<P extends object, S extends object> = {
-  [K in keyof P]: K extends keyof S ? Narrow<P[K], S[K]> : unknown;
-};
+/** Is pattern P compatible with scrutinee-variant S? Checks only keys that P specifies. */
+type Compatible<P, S> =
+  [P] extends [object]
+    ? [S] extends [object]
+      ? {
+          [K in keyof P & keyof S]:
+            // pattern key matters for compatibility; skip "don't narrow" pattern nodes
+            P[K] extends LVar              ? true
+          : P[K] extends RestLVar          ? true
+          : P[K] extends { readonly [WILDCARD]: true } ? true
+          : P[K] extends (...args: any) => any ? true  // predicates pass structurally
+          : IsCompatibleValue<P[K], S[K]>
+        }[keyof P & keyof S] extends true
+          ? HasAllRequired<P, S>
+          : false
+      : false
+    : true;
+
+/** Does S have keys for every key P expects (non-capture, non-wildcard)? */
+type HasAllRequired<P, S> =
+  keyof P extends keyof S
+    ? true
+    : false;
+
+/** Is a single pattern value compatible with a single scrutinee value? */
+type IsCompatibleValue<PV, SV> =
+  [PV] extends [SV]
+    ? true
+  : [SV] extends [PV]
+    ? true
+  : [PV] extends [object]
+    ? [SV] extends [object]
+      ? Compatible<PV, SV>
+      : false
+    : false;
+
+/** For one matching variant, recursively narrow the inside too. */
+type NarrowOne<P, S> =
+  [P] extends [object]
+    ? [S] extends [object]
+      ? S extends readonly unknown[]
+        ? S
+        : {
+            [K in keyof S]:
+              K extends keyof P
+                ? Narrow<P[K], S[K]>
+                : S[K];
+          }
+      : S
+    : S;
+
+// Narrow S to tuple variants whose length matches P (if fixed) AND whose
+// individual element types are compatible with the pattern's element
+// specifications (literals, nested structural patterns).
+type NarrowArray<P extends readonly unknown[], S> =
+  DistributeNarrowArray<P, S> extends infer R
+    ? [R] extends [never] ? S : R
+    : S;
+
+type DistributeNarrowArray<P extends readonly unknown[], S> =
+  S extends readonly unknown[]
+    ? ArrayCompatible<P, S> extends true
+      ? S
+      : never
+    : never;
+
+// Pattern/array-variant compatibility: length matches (or pattern has rest),
+// and each aligned pair is element-compatible.
+type ArrayCompatible<P extends readonly unknown[], S extends readonly unknown[]> =
+  HasRest<P> extends true
+    ? ArrayCompatibleRest<P, S>
+    : S["length"] extends P["length"]
+      ? ElementsCompatible<P, S>
+      : false;
+
+type ElementsCompatible<P extends readonly unknown[], S extends readonly unknown[]> =
+  P extends readonly [infer PH, ...infer PT]
+    ? S extends readonly [infer SH, ...infer ST]
+      ? IsElementCompatible<PH, SH> extends true
+        ? PT extends readonly unknown[]
+          ? ST extends readonly unknown[]
+            ? ElementsCompatible<PT, ST>
+            : true
+          : true
+        : false
+      : true
+    : true;
+
+// For rest patterns we only check the fixed head and tail, not the rest slot.
+type ArrayCompatibleRest<P extends readonly unknown[], S extends readonly unknown[]> =
+  P extends readonly [infer PH, ...infer PT]
+    ? PH extends RestLVar<string>
+      ? true  // rest slurps everything remaining; stop checking
+      : S extends readonly [infer SH, ...infer ST]
+        ? IsElementCompatible<PH, SH> extends true
+          ? PT extends readonly unknown[]
+            ? ST extends readonly unknown[]
+              ? ArrayCompatibleRest<PT, ST>
+              : true
+            : true
+          : false
+        : false
+    : true;
+
+// "Does pattern-element PV admit scrutinee-element SV?"
+type IsElementCompatible<PV, SV> =
+  PV extends LVar                          ? true
+  : PV extends RestLVar                    ? true
+  : PV extends { readonly [WILDCARD]: true } ? true
+  : PV extends (...args: any) => any       ? true
+  : [PV] extends [SV]                      ? true
+  : [SV] extends [PV]                      ? true
+  : [PV] extends [object]
+    ? [SV] extends [object]
+      ? Compatible<PV, SV>
+      : false
+    : false;
+
+type HasRest<P extends readonly unknown[]> =
+  P extends readonly [infer H, ...infer R]
+    ? H extends RestLVar<string>
+      ? true
+      : HasRest<R>
+    : false;
 
 type UnionToIntersection<U> =
   (U extends any ? (k: U) => void : never) extends (k: infer I) => void
@@ -195,7 +360,7 @@ function isThenable(x: unknown): x is PromiseLike<unknown> {
 }
 
 // -----------------------------------------------------------------------------
-// _  : wildcard sentinel | LVar constructor | typed hole
+// _  : wildcard sentinel | LVar constructor | typed hole | _.rest for arrays
 // -----------------------------------------------------------------------------
 
 function _impl<N extends string>(name: N): LVar<N>;
@@ -205,11 +370,13 @@ function _impl(name?: string): LVar | never {
   return { __lvar: true, name };
 }
 (_impl as any)[WILDCARD] = true;
+(_impl as any).rest = <N extends string>(name: N): RestLVar<N> => ({ __rest_lvar: true, name });
 
 export const _: {
   <N extends string>(name: N): LVar<N>;
   (): never;
   readonly [WILDCARD]: true;
+  rest<N extends string>(name: N): RestLVar<N>;
 } = _impl as any;
 
 // -----------------------------------------------------------------------------
@@ -253,6 +420,9 @@ export function A(first: any, ...rest: any[]): any {
 // looser (but still correct) types.
 // -----------------------------------------------------------------------------
 
+// Kept as a public type alias for documentation/reuse; the overloads below
+// inline this shape because TS overload inference fails to independently
+// solve P1/P2/... when Arm is used as a single aliased parameter type.
 type Arm<P, S, R> = readonly [
   P,
   (captures: ExtractCaptures<P, S>, value: Narrow<P, S>) => R,
@@ -260,35 +430,63 @@ type Arm<P, S, R> = readonly [
 
 export function B<S, const P1, R1>(
   scrutinee: S,
-  a1: Arm<P1, S, R1>,
+  a1: readonly [P1, (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1],
 ): R1;
 export function B<S, const P1, R1, const P2, R2>(
   scrutinee: S,
-  a1: Arm<P1, S, R1>, a2: Arm<P2, S, R2>,
+  a1: readonly [P1, (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1],
+  a2: readonly [P2, (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2],
 ): R1 | R2;
 export function B<S, const P1, R1, const P2, R2, const P3, R3>(
   scrutinee: S,
-  a1: Arm<P1, S, R1>, a2: Arm<P2, S, R2>, a3: Arm<P3, S, R3>,
+  a1: readonly [P1, (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1],
+  a2: readonly [P2, (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2],
+  a3: readonly [P3, (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3],
 ): R1 | R2 | R3;
 export function B<S, const P1, R1, const P2, R2, const P3, R3, const P4, R4>(
   scrutinee: S,
-  a1: Arm<P1, S, R1>, a2: Arm<P2, S, R2>, a3: Arm<P3, S, R3>, a4: Arm<P4, S, R4>,
+  a1: readonly [P1, (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1],
+  a2: readonly [P2, (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2],
+  a3: readonly [P3, (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3],
+  a4: readonly [P4, (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4],
 ): R1 | R2 | R3 | R4;
 export function B<S, const P1, R1, const P2, R2, const P3, R3, const P4, R4, const P5, R5>(
   scrutinee: S,
-  a1: Arm<P1, S, R1>, a2: Arm<P2, S, R2>, a3: Arm<P3, S, R3>, a4: Arm<P4, S, R4>, a5: Arm<P5, S, R5>,
+  a1: readonly [P1, (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1],
+  a2: readonly [P2, (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2],
+  a3: readonly [P3, (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3],
+  a4: readonly [P4, (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4],
+  a5: readonly [P5, (captures: ExtractCaptures<P5, S>, value: Narrow<P5, S>) => R5],
 ): R1 | R2 | R3 | R4 | R5;
 export function B<S, const P1, R1, const P2, R2, const P3, R3, const P4, R4, const P5, R5, const P6, R6>(
   scrutinee: S,
-  a1: Arm<P1, S, R1>, a2: Arm<P2, S, R2>, a3: Arm<P3, S, R3>, a4: Arm<P4, S, R4>, a5: Arm<P5, S, R5>, a6: Arm<P6, S, R6>,
+  a1: readonly [P1, (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1],
+  a2: readonly [P2, (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2],
+  a3: readonly [P3, (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3],
+  a4: readonly [P4, (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4],
+  a5: readonly [P5, (captures: ExtractCaptures<P5, S>, value: Narrow<P5, S>) => R5],
+  a6: readonly [P6, (captures: ExtractCaptures<P6, S>, value: Narrow<P6, S>) => R6],
 ): R1 | R2 | R3 | R4 | R5 | R6;
 export function B<S, const P1, R1, const P2, R2, const P3, R3, const P4, R4, const P5, R5, const P6, R6, const P7, R7>(
   scrutinee: S,
-  a1: Arm<P1, S, R1>, a2: Arm<P2, S, R2>, a3: Arm<P3, S, R3>, a4: Arm<P4, S, R4>, a5: Arm<P5, S, R5>, a6: Arm<P6, S, R6>, a7: Arm<P7, S, R7>,
+  a1: readonly [P1, (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1],
+  a2: readonly [P2, (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2],
+  a3: readonly [P3, (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3],
+  a4: readonly [P4, (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4],
+  a5: readonly [P5, (captures: ExtractCaptures<P5, S>, value: Narrow<P5, S>) => R5],
+  a6: readonly [P6, (captures: ExtractCaptures<P6, S>, value: Narrow<P6, S>) => R6],
+  a7: readonly [P7, (captures: ExtractCaptures<P7, S>, value: Narrow<P7, S>) => R7],
 ): R1 | R2 | R3 | R4 | R5 | R6 | R7;
 export function B<S, const P1, R1, const P2, R2, const P3, R3, const P4, R4, const P5, R5, const P6, R6, const P7, R7, const P8, R8>(
   scrutinee: S,
-  a1: Arm<P1, S, R1>, a2: Arm<P2, S, R2>, a3: Arm<P3, S, R3>, a4: Arm<P4, S, R4>, a5: Arm<P5, S, R5>, a6: Arm<P6, S, R6>, a7: Arm<P7, S, R7>, a8: Arm<P8, S, R8>,
+  a1: readonly [P1, (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1],
+  a2: readonly [P2, (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2],
+  a3: readonly [P3, (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3],
+  a4: readonly [P4, (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4],
+  a5: readonly [P5, (captures: ExtractCaptures<P5, S>, value: Narrow<P5, S>) => R5],
+  a6: readonly [P6, (captures: ExtractCaptures<P6, S>, value: Narrow<P6, S>) => R6],
+  a7: readonly [P7, (captures: ExtractCaptures<P7, S>, value: Narrow<P7, S>) => R7],
+  a8: readonly [P8, (captures: ExtractCaptures<P8, S>, value: Narrow<P8, S>) => R8],
 ): R1 | R2 | R3 | R4 | R5 | R6 | R7 | R8;
 // Fallback for >8 arms: looser types
 export function B<S, R>(
@@ -330,39 +528,71 @@ export namespace B {
   // use the return value will surface the error at the call site.
   export function exhaustive<S, const P1, R1>(
     scrutinee: S,
-    a1: Arm<P1, S, R1>,
+    a1: readonly [P1, (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1],
   ): ExhaustiveReturn<S, readonly [readonly [P1, any]], R1>;
   export function exhaustive<S, const P1, R1, const P2, R2>(
     scrutinee: S,
-    a1: Arm<P1, S, R1>, a2: Arm<P2, S, R2>,
+    a1: readonly [P1, (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1],
+    a2: readonly [P2, (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2],
   ): ExhaustiveReturn<S, readonly [readonly [P1, any], readonly [P2, any]], R1 | R2>;
   export function exhaustive<S, const P1, R1, const P2, R2, const P3, R3>(
     scrutinee: S,
-    a1: Arm<P1, S, R1>, a2: Arm<P2, S, R2>, a3: Arm<P3, S, R3>,
+    a1: readonly [P1, (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1],
+    a2: readonly [P2, (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2],
+    a3: readonly [P3, (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3],
   ): ExhaustiveReturn<S, readonly [readonly [P1, any], readonly [P2, any], readonly [P3, any]], R1 | R2 | R3>;
   export function exhaustive<S, const P1, R1, const P2, R2, const P3, R3, const P4, R4>(
     scrutinee: S,
-    a1: Arm<P1, S, R1>, a2: Arm<P2, S, R2>, a3: Arm<P3, S, R3>, a4: Arm<P4, S, R4>,
+    a1: readonly [P1, (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1],
+    a2: readonly [P2, (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2],
+    a3: readonly [P3, (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3],
+    a4: readonly [P4, (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4],
   ): ExhaustiveReturn<S, readonly [readonly [P1, any], readonly [P2, any], readonly [P3, any], readonly [P4, any]], R1 | R2 | R3 | R4>;
   export function exhaustive<S, const P1, R1, const P2, R2, const P3, R3, const P4, R4, const P5, R5>(
     scrutinee: S,
-    a1: Arm<P1, S, R1>, a2: Arm<P2, S, R2>, a3: Arm<P3, S, R3>, a4: Arm<P4, S, R4>, a5: Arm<P5, S, R5>,
+    a1: readonly [P1, (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1],
+    a2: readonly [P2, (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2],
+    a3: readonly [P3, (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3],
+    a4: readonly [P4, (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4],
+    a5: readonly [P5, (captures: ExtractCaptures<P5, S>, value: Narrow<P5, S>) => R5],
   ): ExhaustiveReturn<S, readonly [readonly [P1, any], readonly [P2, any], readonly [P3, any], readonly [P4, any], readonly [P5, any]], R1 | R2 | R3 | R4 | R5>;
   export function exhaustive<S, const P1, R1, const P2, R2, const P3, R3, const P4, R4, const P5, R5, const P6, R6>(
     scrutinee: S,
-    a1: Arm<P1, S, R1>, a2: Arm<P2, S, R2>, a3: Arm<P3, S, R3>, a4: Arm<P4, S, R4>, a5: Arm<P5, S, R5>, a6: Arm<P6, S, R6>,
+    a1: readonly [P1, (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1],
+    a2: readonly [P2, (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2],
+    a3: readonly [P3, (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3],
+    a4: readonly [P4, (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4],
+    a5: readonly [P5, (captures: ExtractCaptures<P5, S>, value: Narrow<P5, S>) => R5],
+    a6: readonly [P6, (captures: ExtractCaptures<P6, S>, value: Narrow<P6, S>) => R6],
   ): ExhaustiveReturn<S, readonly [readonly [P1, any], readonly [P2, any], readonly [P3, any], readonly [P4, any], readonly [P5, any], readonly [P6, any]], R1 | R2 | R3 | R4 | R5 | R6>;
   export function exhaustive<S, const P1, R1, const P2, R2, const P3, R3, const P4, R4, const P5, R5, const P6, R6, const P7, R7>(
     scrutinee: S,
-    a1: Arm<P1, S, R1>, a2: Arm<P2, S, R2>, a3: Arm<P3, S, R3>, a4: Arm<P4, S, R4>, a5: Arm<P5, S, R5>, a6: Arm<P6, S, R6>, a7: Arm<P7, S, R7>,
+    a1: readonly [P1, (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1],
+    a2: readonly [P2, (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2],
+    a3: readonly [P3, (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3],
+    a4: readonly [P4, (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4],
+    a5: readonly [P5, (captures: ExtractCaptures<P5, S>, value: Narrow<P5, S>) => R5],
+    a6: readonly [P6, (captures: ExtractCaptures<P6, S>, value: Narrow<P6, S>) => R6],
+    a7: readonly [P7, (captures: ExtractCaptures<P7, S>, value: Narrow<P7, S>) => R7],
   ): ExhaustiveReturn<S, readonly [readonly [P1, any], readonly [P2, any], readonly [P3, any], readonly [P4, any], readonly [P5, any], readonly [P6, any], readonly [P7, any]], R1 | R2 | R3 | R4 | R5 | R6 | R7>;
   export function exhaustive<S, const P1, R1, const P2, R2, const P3, R3, const P4, R4, const P5, R5, const P6, R6, const P7, R7, const P8, R8>(
     scrutinee: S,
-    a1: Arm<P1, S, R1>, a2: Arm<P2, S, R2>, a3: Arm<P3, S, R3>, a4: Arm<P4, S, R4>, a5: Arm<P5, S, R5>, a6: Arm<P6, S, R6>, a7: Arm<P7, S, R7>, a8: Arm<P8, S, R8>,
+    a1: readonly [P1, (captures: ExtractCaptures<P1, S>, value: Narrow<P1, S>) => R1],
+    a2: readonly [P2, (captures: ExtractCaptures<P2, S>, value: Narrow<P2, S>) => R2],
+    a3: readonly [P3, (captures: ExtractCaptures<P3, S>, value: Narrow<P3, S>) => R3],
+    a4: readonly [P4, (captures: ExtractCaptures<P4, S>, value: Narrow<P4, S>) => R4],
+    a5: readonly [P5, (captures: ExtractCaptures<P5, S>, value: Narrow<P5, S>) => R5],
+    a6: readonly [P6, (captures: ExtractCaptures<P6, S>, value: Narrow<P6, S>) => R6],
+    a7: readonly [P7, (captures: ExtractCaptures<P7, S>, value: Narrow<P7, S>) => R7],
+    a8: readonly [P8, (captures: ExtractCaptures<P8, S>, value: Narrow<P8, S>) => R8],
   ): ExhaustiveReturn<S, readonly [readonly [P1, any], readonly [P2, any], readonly [P3, any], readonly [P4, any], readonly [P5, any], readonly [P6, any], readonly [P7, any], readonly [P8, any]], R1 | R2 | R3 | R4 | R5 | R6 | R7 | R8>;
   export function exhaustive(scrutinee: any, ...arms: readonly (readonly [unknown, AnyFn])[]): any {
     return B(scrutinee, ...arms);
   }
+}
+
+function isRestLVar(x: unknown): x is RestLVar {
+  return !!x && typeof x === "object" && (x as RestLVar).__rest_lvar === true;
 }
 
 function matchPattern(
@@ -378,6 +608,11 @@ function matchPattern(
     return true;
   }
   if (typeof pattern === "function") return Boolean(pattern(value));
+  // Array pattern handling — length-exact unless a RestLVar appears
+  if (Array.isArray(pattern)) {
+    if (!Array.isArray(value)) return false;
+    return matchArrayPattern(pattern, value, captures);
+  }
   if (pattern && typeof pattern === "object" && value && typeof value === "object") {
     for (const key of Object.keys(pattern as object)) {
       if (!matchPattern((pattern as any)[key], (value as any)[key], captures)) return false;
@@ -385,6 +620,45 @@ function matchPattern(
     return true;
   }
   return Object.is(pattern, value);
+}
+
+function matchArrayPattern(
+  pattern: readonly unknown[],
+  value: readonly unknown[],
+  captures: Record<string, unknown>,
+): boolean {
+  // Scan for a rest position. There may be at most one.
+  let restIdx = -1;
+  for (let i = 0; i < pattern.length; i++) {
+    if (isRestLVar(pattern[i])) {
+      if (restIdx !== -1) return false; // malformed: multiple rests
+      restIdx = i;
+    }
+  }
+
+  if (restIdx === -1) {
+    // Exact-length match
+    if (pattern.length !== value.length) return false;
+    for (let i = 0; i < pattern.length; i++) {
+      if (!matchPattern(pattern[i], value[i], captures)) return false;
+    }
+    return true;
+  }
+
+  // Rest-capture match: the rest slurps [restIdx .. value.length - tailLen).
+  const headLen = restIdx;
+  const tailLen = pattern.length - restIdx - 1;
+  if (value.length < headLen + tailLen) return false;
+
+  for (let i = 0; i < headLen; i++) {
+    if (!matchPattern(pattern[i], value[i], captures)) return false;
+  }
+  const rest = value.slice(headLen, value.length - tailLen);
+  captures[(pattern[restIdx] as RestLVar).name] = rest;
+  for (let i = 0; i < tailLen; i++) {
+    if (!matchPattern(pattern[restIdx + 1 + i], value[value.length - tailLen + i], captures)) return false;
+  }
+  return true;
 }
 
 // -----------------------------------------------------------------------------

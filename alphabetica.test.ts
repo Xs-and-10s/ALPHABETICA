@@ -192,6 +192,77 @@ const xunit = D("ALPHABETICA", () => {
       A(E(name("green"), "G"));
       A(E(name("blue"), "B"));
     });
+    E("array pattern: exact-length matches", () => {
+      const r = B(
+        [1, 2, 3],
+        [[1, 2, 3], () => "exact"],
+        [_, () => "fell through"],
+      );
+      A(E(r, "exact"));
+    });
+    E("array pattern: length mismatch does NOT match", () => {
+      const r = B(
+        [1, 2, 3],
+        [[1, 2], () => "wrong"],
+        [_, () => "fell through"],
+      );
+      A(E(r, "fell through"));
+    });
+    E("array pattern: positional captures", () => {
+      const r = B([10, 20, 30] as const, [
+        [_("a"), _("b"), _("c")],
+        ({ a, b, c }) => a + b + c,
+      ]);
+      A(E(r, 60));
+    });
+    E("array pattern: _.rest captures tail as array", () => {
+      const r = B(
+        [1, 2, 3, 4, 5],
+        [
+          [_("head"), _.rest("tail")],
+          ({ head, tail }) => `${head}:${tail.join(",")}`,
+        ],
+        [_, () => "fallback"],
+      );
+      A(E(r, "1:2,3,4,5"));
+    });
+    E("array pattern: _.rest in middle, head + tail captured", () => {
+      const r = B(
+        [1, 2, 3, 4, 5],
+        [
+          [_("first"), _.rest("middle"), _("last")],
+          ({ first, middle, last }) => `${first}/${middle.length}/${last}`,
+        ],
+      );
+      A(E(r, "1/3/5"));
+    });
+    E("array pattern: empty rest still matches", () => {
+      const r = B(
+        [1, 9],
+        [
+          [_("first"), _.rest("mid"), _("last")],
+          ({ first, mid, last }) => `${first}/${mid.length}/${last}`,
+        ],
+      );
+      A(E(r, "1/0/9"));
+    });
+    E("array pattern: nested inside object", () => {
+      const r = B({ coords: [10, 20] as const }, [
+        { coords: [_("x"), _("y")] },
+        ({ x, y }) => `${x},${y}`,
+      ]);
+      A(E(r, "10,20"));
+    });
+    E("array pattern: length-discriminated union narrows", () => {
+      type LengthUnion = readonly [string] | readonly [string, number];
+      const lu: LengthUnion = ["hello", 42];
+      const r = B(
+        lu,
+        [[_("x")], ({ x }) => `1:${x}`],
+        [[_("x"), _("y")], ({ x, y }) => `2:${x}=${y}`],
+      );
+      A(E(r, "2:hello=42"));
+    });
   });
 
   D("C  Compose (right-to-left) / Class", () => {

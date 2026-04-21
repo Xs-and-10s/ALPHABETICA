@@ -99,6 +99,38 @@ const xunit = D("ALPHABETICA (JS)", () => {
       A(E(classify({ kind: "user", name: "alice" }), "u:alice"));
       A(E(classify({ kind: "admin", name: "bob" }), "a:bob"));
     });
+    E("array pattern: exact-length matches", () => {
+      const r = B([1, 2, 3], [[1, 2, 3], () => "exact"], [_, () => "fell"]);
+      A(E(r, "exact"));
+    });
+    E("array pattern: length mismatch does NOT match", () => {
+      const r = B([1, 2, 3], [[1, 2], () => "wrong"], [_, () => "fell"]);
+      A(E(r, "fell"));
+    });
+    E("array pattern: positional captures", () => {
+      const r = B([10, 20, 30], [[_("a"), _("b"), _("c")], ({a,b,c}) => a+b+c]);
+      A(E(r, 60));
+    });
+    E("array pattern: _.rest captures tail", () => {
+      const r = B([1, 2, 3, 4, 5],
+        [[_("h"), _.rest("t")], ({h, t}) => `${h}:${t.join(",")}`]);
+      A(E(r, "1:2,3,4,5"));
+    });
+    E("array pattern: rest in middle", () => {
+      const r = B([1, 2, 3, 4, 5],
+        [[_("a"), _.rest("m"), _("b")], ({a, m, b}) => `${a}/${m.length}/${b}`]);
+      A(E(r, "1/3/5"));
+    });
+    E("array pattern: empty rest", () => {
+      const r = B([1, 9],
+        [[_("a"), _.rest("m"), _("b")], ({a, m, b}) => `${a}/${m.length}/${b}`]);
+      A(E(r, "1/0/9"));
+    });
+    E("array pattern: nested in object", () => {
+      const r = B({coords: [10, 20]},
+        [{coords: [_("x"), _("y")]}, ({x, y}) => `${x},${y}`]);
+      A(E(r, "10,20"));
+    });
   });
 
   D("C  Compose / Class", () => {
