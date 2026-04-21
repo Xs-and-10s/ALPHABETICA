@@ -1,0 +1,25 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "target": "es2022",
+    "declaration": false,
+    "declarationMap": false,
+    "emitDeclarationOnly": false,
+    "noEmit": false,
+    "outDir": "./dist/cjs",
+    "allowImportingTsExtensions": false,
+    "verbatimModuleSyntax": false,
+  },
+  "include": ["alphabetica.ts"],
+  "exclude": [
+    "alphabetica.test.ts",
+    "alphabetica.test.mjs",
+    "alphabetica.test.cjs",
+    "exhaustive.test.ts",
+    "scripts",
+    "node_modules",
+    "dist",
+  ],
+}

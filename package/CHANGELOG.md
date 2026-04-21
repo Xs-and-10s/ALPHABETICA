@@ -3,6 +3,42 @@
 All notable changes to ALPHABETICA are documented here. This project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.4-alpha.0] — 2026-04-19
+
+### Added
+
+- **CommonJS distribution alongside ESM.** `require("@xs-and-10s/alphabetica")`
+  now works in CJS consumers. Implementation:
+    - New `tsconfig.cjs.json` compiles `alphabetica.ts` to `dist/cjs/alphabetica.js`
+      as real CommonJS (`"use strict"`, `module.exports`, no ESM-interop shims
+      beyond what `tsc` emits automatically).
+    - `dist/cjs/package.json` with `{"type":"commonjs"}` overrides the
+      outer `"type": "module"` so Node treats the `.js` output correctly.
+    - `package.json` `exports` map now has a `require` condition pointing
+      at the CJS build, alongside existing `import` and `types`.
+    - `alphabetica.test.cjs` smoke test verifies `require()` succeeds,
+      all 39 exports are present, and core runtime (B pattern match,
+      F fold, S/X logic queries, bare `_` wildcards) works identically
+      to the ESM build.
+- **Continuous integration.** `.github/workflows/ci.yml` runs the full
+  pipeline (`typecheck + test + build`) on every push and pull request
+  across Node 20/22/24 × Ubuntu/macOS/Windows. Windows coverage in
+  particular catches latent path-separator and shell-execution bugs that
+  don't surface in local dev.
+
+### Technical notes
+
+- The TS source remains the **single source of truth for types and CJS**.
+  `alphabetica.mjs` is still the hand-maintained ESM entry (kept as-is for
+  zero-dep no-build consumers), and the CJS build is auto-generated — no
+  drift possible between TS and CJS. Only the ESM hand-maintained twin
+  could drift, and the existing test suite catches that (the JS suite runs
+  independently against `.mjs`).
+- Zero new production dependencies. The CJS build uses `tsc` alone.
+- Package size: the CJS build adds ~30 KB uncompressed to the tarball;
+  the `files` allowlist already included `dist/` so no files field change
+  was needed.
+
 ## [0.4.3-alpha.0] — 2026-04-19
 
 ### Changed

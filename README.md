@@ -32,6 +32,21 @@ npm install @xs-and-10s/alphabetica
 
 Requires Node 22+ (AsyncLocalStorage, disposables, `Symbol.dispose`).
 
+Works with both ESM and CommonJS consumers:
+
+```js
+// ESM
+import { B, _ } from "@xs-and-10s/alphabetica";
+
+// CommonJS
+const { B, _ } = require("@xs-and-10s/alphabetica");
+```
+
+Node's exports-map resolution picks the right build automatically — ESM
+consumers get the handwritten `alphabetica.mjs`, CJS consumers get the
+auto-generated `dist/cjs/alphabetica.js`. Both expose the identical 27-slot
+API.
+
 ## Two distributions, one API
 
 ```js
