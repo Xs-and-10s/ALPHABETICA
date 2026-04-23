@@ -1,6 +1,6 @@
 {
   "name": "@xs-and-10s/alphabetica",
-  "version": "0.4.4-alpha.0",
+  "version": "0.4.5-alpha.0",
   "description": "26 letters plus _, one per utility. A tiny, dependency-free combinator library for testing, DevOps scripting, code golf, and sandboxed execution.",
   "keywords": [
     "testing",
@@ -54,17 +54,21 @@
     "build:types": "tsc -p tsconfig.build.json",
     "build:cjs": "tsc -p tsconfig.cjs.json && node scripts/write-cjs-marker.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "tsx alphabetica.test.ts && tsx exhaustive.test.ts && node alphabetica.test.mjs && npm run test:cjs",
+    "test": "tsx alphabetica.test.ts && tsx exhaustive.test.ts && node alphabetica.test.mjs && npm run test:cjs && npm run test:types && npm run test:fuzz",
     "test:ts": "tsx alphabetica.test.ts",
     "test:exhaustive": "tsx exhaustive.test.ts",
     "test:mjs": "node alphabetica.test.mjs",
     "test:cjs": "npm run build:cjs && node alphabetica.test.cjs",
     "test:cjs:run": "node alphabetica.test.cjs",
+    "test:types": "tsc --noEmit alphabetica.test-d.ts --target esnext --module esnext --moduleResolution bundler --strict --allowImportingTsExtensions --skipLibCheck --types node",
+    "test:fuzz": "node alphabetica.fuzz.mjs",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "prepublishOnly": "npm run clean && npm run typecheck && npm run test && npm run build"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "expect-type": "^1.3.0",
+    "fast-check": "^4.7.0",
     "tsx": "^4.21.0",
     "typescript": "^5.5.0"
   }

@@ -3,6 +3,70 @@
 All notable changes to ALPHABETICA are documented here. This project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.5-alpha.0] — 2026-04-23
+
+### Added — Test infrastructure
+
+- **Type-level test suite** at `alphabetica.test-d.ts` using `expect-type`.
+  21 assertions covering ExtractCaptures (7), Narrow (11), and targeted
+  regressions (3) for the silent type bugs caught across 0.4.0–0.4.3:
+  union-scrutinee capture weakening, SV distribution in IsCompatibleValue,
+  and array exact-length exclusion of shorter/longer tuples. Executes
+  entirely at `tsc --noEmit` time — zero runtime cost. Invoked via
+  `npm run test:types`.
+- **Property-based fuzz suite** at `alphabetica.fuzz.mjs` using `fast-check`.
+  30 properties × 200 randomized runs = 6,000 test cases per full run,
+  covering the highest-signal targets:
+    - `B` pattern matcher (12 properties): literal match/mismatch, LVar
+      capture, wildcard, array length exact-match — including a property
+      locking in the 0.4.1 "silent length-mismatch" bug — rest capture,
+      object pattern, predicate, first-arm-wins, nested two-level.
+    - `S` unification (6 properties): query count correctness,
+      X/S cross-consistency, determinism across repeated runs, bare `_`
+      in goals (locking in the 0.4.3 bug), nonexistent relation returns
+      empty, LVar-only queries return one sub per fact.
+    - `F` fold (4 properties): addition-fold = sum, left-to-right order
+      preservation on non-associative ops, empty-array returns seed,
+      call-count invariance.
+    - `Y` trampoline (4 properties): factorial equals iterative version,
+      no stack overflow at 50k depth, identity preservation,
+      non-bouncing return short-circuits.
+    - `Z` zip (4 properties): output length = min of inputs, positional
+      alignment, empty-with-anything is empty, 3-array zip bounded by
+      shortest.
+  Invoked via `npm run test:fuzz`.
+
+### Added — devDependencies
+
+- `expect-type@^1.3.0` — type-level assertions. Pure-TS, no runtime.
+- `fast-check@^4.7.0` — property-based testing framework.
+
+Zero production dependencies. Both tools run at test time only and don't
+ship in the published tarball.
+
+### Changed — Test orchestration
+
+- The `test` script now runs the full chain: TS suite → exhaustive → JS/MJS
+  suite → CJS smoke → type tests → fuzz suite. Full-green threshold is now
+  98 TS + 7 exhaustive + 84 JS + CJS smoke + 21 type-level + 30 properties
+  × 200 runs each = effectively ~6,200 total assertions verifying the
+  library end-to-end on every test run.
+- GitHub Actions CI now includes `test:types` and `test:fuzz` as separate
+  named steps for failure visibility in the matrix.
+
+### Regression coverage — lock-in summary
+
+Every silent bug caught across 0.4.0–0.4.3 now has at least one property-
+based test asserting the fix holds:
+
+| Bug                                          | Version | Locked-in by              |
+|----------------------------------------------|---------|---------------------------|
+| Array length silent match                    | 0.4.1   | B prop #6 + Narrow test 21|
+| SV distribution in IsCompatibleValue         | 0.4.2   | Narrow test 20            |
+| Capture inference distributes-weakens        | 0.4.2   | Capture test 19           |
+| Bare `_` fails to unify in `goal()` slots    | 0.4.3   | S prop #3                 |
+| `C` private-method language-level constraint | 0.4.3   | Documented in README      |
+
 ## [0.4.4-alpha.0] — 2026-04-19
 
 ### Added

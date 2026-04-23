@@ -52,6 +52,12 @@ jobs:
       - name: Test (CJS smoke)
         run: npm run test:cjs:run
 
+      - name: Test (type-level)
+        run: npm run test:types
+
+      - name: Test (property-based fuzz)
+        run: npm run test:fuzz
+
   publish-check:
     name: Dry-run publish
     runs-on: ubuntu-latest
