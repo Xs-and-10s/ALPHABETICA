@@ -1,6 +1,6 @@
 {
   "name": "@xs-and-10s/alphabetica",
-  "version": "0.4.5-alpha.0",
+  "version": "0.5.0",
   "description": "26 letters plus _, one per utility. A tiny, dependency-free combinator library for testing, DevOps scripting, code golf, and sandboxed execution.",
   "keywords": [
     "testing",

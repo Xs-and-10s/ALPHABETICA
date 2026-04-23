@@ -3,35 +3,94 @@
 All notable changes to ALPHABETICA are documented here. This project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## [0.5.0] — 2026-04-23
 
-### Documentation
+**The feature-complete release.** 0.5.0 is the last planned minor version
+before 1.0: the API surface is frozen, every documented behavior has
+regression coverage, and the library ships with CI across six platform
+combinations. From here, only bug fixes are expected until 1.0-rc.1.
 
-- **README rewrite.** New opening with a tight elevator pitch replacing
-  the bullet-list intro. New "60-second pitch" section showing a working
-  event-stream classifier + logic query in ~30 lines (six letters working
-  together). New "Why ALPHABETICA?" section with honest comparisons
-  against lodash, Zod, Vitest/Jest, and logic-programming libraries.
-  New "Stability and SemVer" section documenting what's public 1.0
-  promise vs. internal. Expanded Roadmap into Shipped / Pre-1.0 /
-  Post-1.0 sections.
-- **Pitch example locked in as a runtime test** in `alphabetica.test.mjs`
-  under `D("README 60-second pitch example", ...)`. If the library ever
-  drifts from what the README promises, this test fails. Same inputs,
-  same outputs (`$129` big-sale amount, 1 error "E42: db timeout",
-  6 total classified events).
+This release aggregates the documentation and polish work from the
+0.4.x series into a single release candidate-track version. No runtime
+behavior changes from 0.4.5 — this is the "ready-for-external-use" label,
+earned rather than claimed.
 
-### Internal
+### The 0.4.x journey, summarized
 
-- **Fixed stale reference.** The intro previously said `C` uses
-  `new Function`; since 0.4.3 it uses the computed-property class-name
-  pattern. Updated language throughout.
-- **Tightened "Two distributions" section.** Previous version had two
-  identical import lines labeled differently, which looked silly.
-  Replaced with an honest single-line version explaining Node's
-  exports-map routing.
+ALPHABETICA's path to 0.5.0 was driven by dogfooding: every version from
+0.4.0 to 0.4.5 was triggered by a real consumer project catching a real
+problem, not by speculative feature addition.
 
-No published code changes. Documentation-only.
+**Bugs fixed, by dogfood:**
+
+| Bug                                        | Caught in                  | Fix shipped |
+|--------------------------------------------|----------------------------|-------------|
+| `kbScope: "inherit"` missing               | dogfood #1 (package audit) | 0.3.1       |
+| `R(path)` resolved relative to library     | dogfood #1                 | 0.3.2       |
+| Array length silent match in `B`           | dogfood #2 (changelog lint)| 0.4.1       |
+| SV union distribution in `Narrow`          | internal type probing      | 0.4.2       |
+| Bare `_` failed to unify in `goal()` slots | dogfood #3 (migrations)    | 0.4.3       |
+| `C` used `new Function` (CSP-unsafe)       | design review              | 0.4.3       |
+
+Every bug now has at least one regression test locking it in — see the
+type-level suite (`alphabetica.test-d.ts`, 21 assertions) and the
+property-based fuzz suite (`alphabetica.fuzz.mjs`, 30 properties × 200
+runs each).
+
+**Infrastructure added:**
+
+- **CJS build** alongside ESM via the exports map (`require` + `import`
+  conditions). Consumers choose their own module system; both work from
+  the same published tarball. — 0.4.4
+- **GitHub Actions CI** matrix across Node 22/24 × Linux/macOS/Windows
+  (6 combinations). Every push and PR runs typecheck + build + all test
+  suites. — 0.4.4
+- **Type-level test suite** using `expect-type` — 21 assertions executing
+  entirely at `tsc --noEmit` time. — 0.4.5
+- **Property-based fuzz suite** using `fast-check` — 30 properties × 200
+  runs each = 6,000 randomized cases per run. — 0.4.5
+
+**Documentation:**
+
+- **README rewrite** with a 60-second pitch showing pattern matching and
+  logic programming composing in ~30 lines. Honest comparisons against
+  lodash, Zod, Vitest/Jest, and logic-programming libraries. SemVer
+  stability commitment documenting what's public 1.0 surface vs.
+  internal.
+- **Stable public API (1.0 promise)** now explicitly documented:
+    - All 27 slots (`A`–`Z` + `_`) with their documented signatures
+    - `run`, `withKB`, `goal`
+    - Reporters: `prettyReporter`, `tapReporter`, `junitReporter`, `nullReporter`
+    - Type exports: `LVar`, `RestLVar`, `Fact`, `Pattern`, `KnowledgeBase`,
+      `Substitution`, `TestNode`, `Module`, `ScopeGranularity`,
+      `ReporterName`, `TestStatus`, `StateTuple`
+    - Symbols: `MODULE_NAME`, `MODULE_DOC`, `DOC`, `WILDCARD`, `BOUNCE`
+
+### Test coverage at 0.5.0
+
+Every full test run verifies:
+
+- 98 TypeScript runtime assertions
+- 85 JavaScript runtime assertions (including the README pitch example)
+- 7 exhaustive type-level cases
+- 21 type-level assertions via `expect-type`
+- 30 properties × 200 runs = 6,000 randomized test cases via `fast-check`
+- 39 CJS export verifications + 4 runtime smoke checks
+- All of the above across Node 22, Node 24, Linux, macOS, and Windows
+
+### What's next
+
+- **Sit period.** 0.5.0 is designed to be used. If external users surface
+  issues, fixes land in 0.5.x.
+- **1.0.0-rc.1** follows once 0.5.0 has demonstrated stability under
+  external use.
+- **1.0.0** when the RC holds up without fixes.
+
+### Upgrading from 0.4.x
+
+No breaking changes. If you're on any 0.4.x version, `npm update` to 0.5.0
+should be transparent. If anything breaks, open an issue — it's a bug,
+not intentional.
 
 ## [0.4.5-alpha.0] — 2026-04-23
 

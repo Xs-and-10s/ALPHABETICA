@@ -493,13 +493,14 @@ either promote it to the stable surface or suggest a path forward.
 - [x] CJS build for older toolchains — 0.4.4
 - [x] GitHub Actions CI across Node 22/24 × Linux/macOS/Windows — 0.4.4
 - [x] Type-level test suite + property-based fuzzing — 0.4.5
+- [x] README rewrite with a compelling 60-second pitch — 0.5.0
+- [x] **0.5.0: feature-complete, API-frozen, ready for external use**
 
-### Pre-1.0
+### On the path to 1.0
 
-- [ ] README rewrite with a compelling 60-second pitch (this document)
-- [ ] 0.5.0 as the "feature-complete" release
-- [ ] 1.0.0-rc.1 after a sit period with external use
-- [ ] 1.0.0 once the RC holds up
+- [ ] Sit period — 0.5.0 under external use, bug fixes only
+- [ ] 1.0.0-rc.1 once 0.5.0 has held up
+- [ ] 1.0.0 when the RC holds up without fixes
 
 ### Post-1.0 (tentative)
 
