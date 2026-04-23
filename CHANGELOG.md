@@ -3,6 +3,36 @@
 All notable changes to ALPHABETICA are documented here. This project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Documentation
+
+- **README rewrite.** New opening with a tight elevator pitch replacing
+  the bullet-list intro. New "60-second pitch" section showing a working
+  event-stream classifier + logic query in ~30 lines (six letters working
+  together). New "Why ALPHABETICA?" section with honest comparisons
+  against lodash, Zod, Vitest/Jest, and logic-programming libraries.
+  New "Stability and SemVer" section documenting what's public 1.0
+  promise vs. internal. Expanded Roadmap into Shipped / Pre-1.0 /
+  Post-1.0 sections.
+- **Pitch example locked in as a runtime test** in `alphabetica.test.mjs`
+  under `D("README 60-second pitch example", ...)`. If the library ever
+  drifts from what the README promises, this test fails. Same inputs,
+  same outputs (`$129` big-sale amount, 1 error "E42: db timeout",
+  6 total classified events).
+
+### Internal
+
+- **Fixed stale reference.** The intro previously said `C` uses
+  `new Function`; since 0.4.3 it uses the computed-property class-name
+  pattern. Updated language throughout.
+- **Tightened "Two distributions" section.** Previous version had two
+  identical import lines labeled differently, which looked silly.
+  Replaced with an honest single-line version explaining Node's
+  exports-map routing.
+
+No published code changes. Documentation-only.
+
 ## [0.4.5-alpha.0] — 2026-04-23
 
 ### Added — Test infrastructure

@@ -512,6 +512,50 @@ const xunit = D("ALPHABETICA (JS)", () => {
       A(E(await r, 10));
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // README 60-second pitch — locked in as a test so the pitch cannot
+  // silently break as the library evolves. If you change this, change
+  // README.md in the same commit.
+  // ---------------------------------------------------------------------------
+  D("README 60-second pitch example", () => {
+    E("event-stream classifier + logic query works end-to-end", () => {
+      const events = [
+        { kind: "signup",   userId: "u1", email: "alice@example.com" },
+        { kind: "login",    userId: "u1" },
+        { kind: "purchase", userId: "u1", amountCents: 4900 },
+        { kind: "purchase", userId: "u2", amountCents: 12900 },
+        { kind: "error",    code: "E42", message: "db timeout" },
+        { kind: "logout",   userId: "u1" },
+      ];
+
+      const classify = (e) => B(e,
+        [{ kind: "signup",   email: _("email") },          ({ email }) => ["new-user", email]],
+        [{ kind: "login",    userId: _("u") },             ({ u })     => ["active",   u]],
+        [{ kind: "purchase", amountCents: (n) => n >= 10000 },
+                                                           (_c, ev)    => ["big-sale", ev.amountCents / 100]],
+        [{ kind: "purchase", userId: _("u") },             ({ u })     => ["small-sale", u]],
+        [{ kind: "error",    code: _("c"), message: _("m") }, ({ c, m })=> ["error", `${c}: ${m}`]],
+        [_,                                                (_c, ev)    => ["other", ev.kind]],
+      );
+
+      withKB([], () => {
+        P((evs) => evs.map(classify),
+          (tagged) => F(tagged, 0, (n, [tag, val]) => (F("classified", tag, val), n + 1)),
+        )(events);
+
+        const bigSales = S([goal("classified", "big-sale", _("amount"))]);
+        const errors   = S([goal("classified", "error",    _("msg"))]);
+
+        // Exact outputs the README promises.
+        A(E(bigSales.length, 1));
+        A(E(bigSales[0].amount, 129));
+        A(E(errors.length, 1));
+        A(E(errors[0].msg, "E42: db timeout"));
+        A(E(Q(X("classified", _, _)), 6));
+      });
+    });
+  });
 });
 
 // -----------------------------------------------------------------------------

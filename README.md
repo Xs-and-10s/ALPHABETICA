@@ -6,22 +6,97 @@
 import { A, B, D, E, F, G, N, S, T, V, W, X, Y, _, run, goal, withKB } from "@xs-and-10s/alphabetica";
 ```
 
-ALPHABETICA is a single-letter combinator library designed for terse call
-sites and strong TypeScript inference. The entire public API fits on one
-keyboard row. It's built for:
+ALPHABETICA is a combinator library where every capital letter is a function.
+Pattern matching, BDD tests, miniKanren logic queries, shell scripting,
+trampolines, and about twenty other combinators — one import, one mental model,
+zero runtime dependencies. Strong TypeScript inference on pattern captures,
+terse call sites, and about 36 KB compiled.
 
-- **Testing** — BDD (`G`/`W`/`T`) and xUnit (`D`/`E`) in the same file,
-  with a built-in runner, fixture injection, and scoped knowledge bases.
-- **DevOps scripting** — shell execution via tagged templates (`X\`cmd\``),
-  file IO on `R`, deep recursion via `Y` (trampoline).
-- **Logic programming** — miniKanren-lite with facts (`F`), negation-as-
-  failure (`N`), unification, and multi-goal queries (`S`).
-- **Code golf** — every utility has a one-character name.
+## 60-second pitch
 
-It is **not** a general-purpose library for user-facing web apps: `C(name, spec)`
-uses `new Function` for dynamic class construction, and `X` / `R` perform IO.
-Use it in tests, build scripts, Web Workers, sandboxes, and places where
-you control the inputs.
+Here's a realistic slice: classify a stream of events by kind, assert the
+results as facts, then query them with logic programming. Six letters doing
+what would normally take three separate libraries.
+
+```js
+import { _, B, F, P, Q, S, X, goal, withKB } from "@xs-and-10s/alphabetica";
+
+const events = [
+  { kind: "signup",   userId: "u1", email: "alice@example.com" },
+  { kind: "login",    userId: "u1" },
+  { kind: "purchase", userId: "u1", amountCents: 4900 },
+  { kind: "purchase", userId: "u2", amountCents: 12900 },
+  { kind: "error",    code: "E42", message: "db timeout" },
+  { kind: "logout",   userId: "u1" },
+];
+
+// B: pattern-match with captures. Each arm narrows shape AND extracts fields.
+const classify = (e) => B(e,
+  [{ kind: "signup",   email: _("email") },          ({ email }) => ["new-user", email]],
+  [{ kind: "login",    userId: _("u") },             ({ u })     => ["active",   u]],
+  [{ kind: "purchase", amountCents: (n) => n >= 10000 },
+                                                     (_c, e)     => ["big-sale", e.amountCents / 100]],
+  [{ kind: "purchase", userId: _("u") },             ({ u })     => ["small-sale", u]],
+  [{ kind: "error",    code: _("c"), message: _("m") },({ c, m })=> ["error", `${c}: ${m}`]],
+  [_,                                                (_c, e)     => ["other", e.kind]],
+);
+
+withKB([], () => {
+  // P: pipeline. F: fold, doubling as the fact-asserter.
+  // One pass: classify each event, then record each classification as a fact.
+  P((evs) => evs.map(classify),
+    (tagged) => F(tagged, 0, (n, [tag, val]) => (F("classified", tag, val), n + 1)),
+  )(events);
+
+  // S + goal: query the knowledge base with unification.
+  const bigSales = S([goal("classified", "big-sale", _("amount"))]);
+  const errors   = S([goal("classified", "error",    _("msg"))]);
+
+  console.log("Big sales:",   bigSales.map(s => `$${s.amount}`));    // ["$129"]
+  console.log("Error count:", errors.length);                        // 1
+  console.log("Total events:", Q(X("classified", _, _)));            // 6
+});
+```
+
+Zero dependencies. Fully typed in TypeScript — `B`'s captures flow through
+to handler parameters automatically. The pattern matcher, the fold, the
+pipeline, the logic queries, and the wildcard all came from the same
+import. Swap this for lodash + zod + a test framework and count the
+dependency lines.
+
+## Why ALPHABETICA?
+
+**Use ALPHABETICA when:** you're writing a DevOps script, a build tool, a
+test runner, a DSL, a code-golf exercise, or any small-to-medium utility
+where pulling in lodash + zod + a logic library + a test framework feels
+like overkill. ALPHABETICA is one import, zero runtime dependencies, and
+about 36 KB compiled. All 27 slots share the same mental model: small
+functions, terse names, composable behavior.
+
+**Don't use ALPHABETICA when:** you're building a large application already
+committed to specific ecosystems (React + Vitest + Zod). Those tools are
+better at their individual jobs than ALPHABETICA is at any one of them.
+ALPHABETICA's value is the *combination* — one coherent library that
+covers most of what a small utility script needs.
+
+A rough comparison:
+
+- **vs. lodash:** lodash is excellent at a hundred things; ALPHABETICA is
+  different at twenty-seven. Lodash has no pattern matching, no logic
+  programming, no built-in test runner — different tool for different jobs.
+- **vs. Zod:** Zod is a validation library with runtime schemas. ALPHABETICA
+  has pattern matching, not schemas — it's not trying to replace Zod. Use
+  Zod when you need JSON-in-the-wild validation; use `B` when you're
+  already in-memory.
+- **vs. Vitest/Jest:** they're much more featureful test runners. `D`/`E`/
+  `G`/`W`/`T` are 80% of what a small library needs with zero extra config.
+- **vs. a logic programming library:** ALPHABETICA's miniKanren is a small
+  subset (no CLP, no tabling, no constraint propagation) — enough for
+  querying in-memory facts, not enough for writing a theorem prover.
+
+The honest version: ALPHABETICA trades feature depth for breadth and
+consistency. If the breadth-for-depth trade fits your project, it'll feel
+frictionless. If it doesn't, use the specialized alternatives.
 
 ## Install
 
@@ -49,20 +124,21 @@ API.
 
 ## Two distributions, one API
 
+The same import line works across runtimes:
+
 ```js
-// TypeScript — superior inference, import from the package entry
-import { B, _ } from "@xs-and-10s/alphabetica";
-
-// JavaScript, no build step — same API
-import { B, _ } from "@xs-and-10s/alphabetica";  // still works!
-
-// Raw .ts source, if your bundler prefers it
-import { B, _ } from "@xs-and-10s/alphabetica/ts";
+import { B, _ } from "@xs-and-10s/alphabetica";          // TS or bundler
+import { B, _ } from "@xs-and-10s/alphabetica/ts";       // raw .ts for bundlers that prefer it
 ```
 
-The TS and JS versions share identical runtime behavior. Use the TS version
-when you want pattern-match capture inference; use the JS version when you
-need a zero-build-step dependency.
+Node's exports-map resolution routes automatically: TypeScript projects
+get the strongly-typed `.mjs` + `.d.ts`, CommonJS consumers get the
+auto-generated `dist/cjs/alphabetica.js`, and the `/ts` subpath is raw
+TypeScript source for bundlers that want to transpile in-place.
+
+The TS and JS versions share identical runtime behavior. Pick the TS
+entry when you want pattern-match capture inference; the JS entry is
+there for zero-build-step projects.
 
 ## The 27 slots
 
@@ -379,26 +455,57 @@ await run(suite, { kbScope: "given" });   // KB shared across a whole given
 Pass `{ silent: true }` to suppress output, `{ filter: path => ... }` to
 run a subset of tests.
 
-## Why?
+## Stability and SemVer
 
-Because the best utility libraries (lodash, ramda, remeda) optimize for
-the reader of the call site, not the writer — and a single character is
-hard to beat. The 27-slot constraint forces tight, coherent "zones of
-meaning" per letter rather than infinite API surface.
+ALPHABETICA follows [Semantic Versioning](https://semver.org/). Once 1.0 is
+cut, breaking changes will require a major version bump.
 
-It pairs especially well with:
-- **Testing** where you want BDD and property-style assertions in the
-  same tree, with no config and no extra dependencies.
-- **Shell-style pipelines** where `P` and `C` replace most of what a
-  `| ` operator would do.
-- **Property-based invariants** expressed as miniKanren queries.
+**Stable public API (1.0 promise):**
+
+- All 27 slots (`A`–`Z` + `_`) with their documented call signatures
+- `run`, `withKB`, `goal`
+- The four reporters: `prettyReporter`, `tapReporter`, `junitReporter`,
+  `nullReporter`
+- The public type exports: `LVar`, `RestLVar`, `Fact`, `Pattern`,
+  `KnowledgeBase`, `Substitution`, `TestNode`, `Module`, `ScopeGranularity`,
+  `ReporterName`, `TestStatus`, `StateTuple`
+- Symbols: `MODULE_NAME`, `MODULE_DOC`, `DOC`, `WILDCARD`, `BOUNCE`
+
+**Internal, may change in any minor release:**
+
+- Type-level helpers: `Narrow`, `ExtractCaptures`, `Compatible`, `NarrowOne`,
+  `NarrowArray`, and other implementation-detail types
+- Reporter construction internals (the exported `Reporter` interface is
+  stable; how individual reporters compose output is not)
+- The `Y_ORIGINAL` symbol (used internally to unwrap trampolined fns)
+- The `/ts` subpath export (direct access to the raw TypeScript source)
+
+If you depend on something not in the stable list, open an issue — we'll
+either promote it to the stable surface or suggest a path forward.
 
 ## Roadmap
 
-- [ ] Scrutinee narrowing for `B` (exhaustiveness checking)
-- [ ] Reporter abstraction for the runner (TAP, JUnit XML)
-- [ ] CJS build for older toolchains
+### Shipped
+
+- [x] Pattern matching with typed captures (`B`) — 0.3.x
+- [x] Exhaustiveness checking (`B.exhaustive`) — 0.3.x
+- [x] Reporter abstraction (pretty, TAP, JUnit) — 0.4.0
+- [x] CJS build for older toolchains — 0.4.4
+- [x] GitHub Actions CI across Node 22/24 × Linux/macOS/Windows — 0.4.4
+- [x] Type-level test suite + property-based fuzzing — 0.4.5
+
+### Pre-1.0
+
+- [ ] README rewrite with a compelling 60-second pitch (this document)
+- [ ] 0.5.0 as the "feature-complete" release
+- [ ] 1.0.0-rc.1 after a sit period with external use
+- [ ] 1.0.0 once the RC holds up
+
+### Post-1.0 (tentative)
+
 - [ ] Bun and Deno explicit support / CI
+- [ ] Performance benchmarks against lodash / ramda / fp-ts equivalents
+- [ ] A matching Zig port for performance-critical scripts
 
 ## License
 
